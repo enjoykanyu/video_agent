@@ -2,14 +2,16 @@ package main
 
 import (
 	"net/http"
-
+	// agent
 	"github.com/gin-gonic/gin"
+	"video_agent/agent"
 )
 
 func main() {
 	// 创建gin引擎
 	r := gin.Default()
-
+	//运行agent
+	agent.NewAgent()
 	// 基本路由
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
