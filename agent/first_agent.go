@@ -4,21 +4,23 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"video_agent/tool" // 导入本地tool包
 
+	"github.com/cloudwego/eino-ext/components/model/ollama"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
-	"video_agent/tool" // 导入本地tool包
 )
 
-
-func newAgent() {
+func NewAgent() {
 	ctx := context.Background() // 添加context初始化
-	
-	// 初始化 tools - 使用本地tool包中的ListTodoTool
+
+	// 初始化 tools - 使用本地tool包中的所有工具
 	// 首先创建为BaseTool切片
 	todoToolsBase := []einotool.BaseTool{
-		&tool.ListTodoTool{}, // 使用本地tool包中的ListTodoTool
+		&tool.ListTodoTool{},   // 列出todo项目
+		&tool.AddTodoTool{},    // 添加todo项目
+		&tool.SearchRepoTool{}, // 搜索仓库
 	}
 	// 创建并配置 ChatModel
 	chatModel, err := ollama.NewChatModel(ctx, &ollama.ChatModelConfig{
@@ -43,7 +45,7 @@ func newAgent() {
 	}
 
 	// 创建 tools 节点
-	_, err := compose.NewToolNode(ctx, &compose.ToolsNodeConfig{
+	todoToolsNode, err := compose.NewToolNode(ctx, &compose.ToolsNodeConfig{
 		Tools: todoToolsBase,
 	})
 	if err != nil {
