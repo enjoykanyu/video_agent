@@ -1,18 +1,19 @@
 package main
 
-import (
-	// "net/http"
-	// agent
-	// "github.com/gin-gonic/gin"
-	"video_agent/agent"
-)
+import "video_agent/agent"
+
+// "net/http"
+// agent
+// "github.com/gin-gonic/gin"
 
 func main() {
 	// 创建gin引擎
 	// r := gin.Default()
 	//运行agent
 	// agent.NewAgent()
-	agent.Graph_agent()
+	// agent.Graph_agent()
+	//运行有大模型的graph
+	agent.NewGraphWithModel()
 	// 基本路由
 	// r.GET("/", func(c *gin.Context) {
 	// 	c.JSON(http.StatusOK, gin.H{
