@@ -1,6 +1,9 @@
 package main
 
-import "video_agent/agent"
+import (
+	"context"
+	"video_agent/agent"
+)
 
 // "net/http"
 // agent
@@ -13,7 +16,10 @@ func main() {
 	// agent.NewAgent()
 	// agent.Graph_agent()
 	//运行有大模型的graph
-	agent.NewGraphWithModel()
+	// agent.NewGraphWithModel()
+	//运行有记忆的graph
+	ctx := context.Background()
+	agent.OrcGraphWithState(ctx, map[string]string{"role": "test1_role", "content": "你在哪"})
 	// 基本路由
 	// r.GET("/", func(c *gin.Context) {
 	// 	c.JSON(http.StatusOK, gin.H{
