@@ -10,6 +10,17 @@ import (
 // "github.com/gin-gonic/gin"
 
 func main() {
+	// 设置并启动HTTP服务器
+	r := SetupRouter()
+	
+	// 在goroutine中运行agent，避免阻塞HTTP服务器
+	go func() {
+		ctx := context.Background()
+		agent.OrcGraphWithState(ctx, map[string]string{"role": "test1_role", "content": "你在哪"})
+	}()
+	
+	// 启动HTTP服务器
+	r.Run(":8080") // 默认在8080端口监听
 	// 创建gin引擎
 	// r := gin.Default()
 	//运行agent
