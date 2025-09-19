@@ -1,12 +1,12 @@
 package agent
 
-// import (
-// 	"context"
-// 	"fmt"
+import (
+	"context"
+	"fmt"
 
-// 	"github.com/cloudwego/eino-ext/components/model/ollama"
-// 	"github.com/cloudwego/eino/compose"
-// 	"github.com/cloudwego/eino/schema"
+	"github.com/cloudwego/eino-ext/components/model/ollama"
+	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 // )
 
 // type State struct {
