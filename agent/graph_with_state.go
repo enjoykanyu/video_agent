@@ -1,13 +1,6 @@
 package agent
 
-import (
-	"context"
-	"fmt"
-
-	"github.com/cloudwego/eino-ext/components/model/ollama"
-	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/schema"
-// )
+// Graph with state example (currently commented out)
 
 // type State struct {
 // 	History map[string]any
@@ -148,3 +141,4 @@ import (
 //		}
 //		fmt.Println(answer.Content)
 //	}
+//}

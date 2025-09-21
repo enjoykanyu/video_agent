@@ -7,6 +7,7 @@ toolchain go1.24.7
 require (
 	github.com/cloudwego/eino v0.5.2
 	github.com/cloudwego/eino-ext/components/model/ollama v0.1.2
+	github.com/gin-gonic/gin v1.10.1
 )
 
 require (
@@ -21,7 +22,6 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.10 // indirect
 	github.com/getkin/kin-openapi v0.118.0 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
-	github.com/gin-gonic/gin v1.10.1 // indirect
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect
 	github.com/go-openapi/swag v0.19.5 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
