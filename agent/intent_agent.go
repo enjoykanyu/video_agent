@@ -51,21 +51,23 @@ func NewIntentAgent(ctx context.Context) (*IntentAgent, error) {
 // RecognizeIntent 识别用户输入的意图
 func (ia *IntentAgent) RecognizeIntent(ctx context.Context, userInput string) (*IntentResult, error) {
 	// 构建意图识别提示词
-	systemPrompt := `你是一个专业的意图分类器。请分析用户输入并判断其意图类型。
+	systemPrompt := `You are a professional intent classifier. Analyze the user's input and determine the intent type. The user input is in Chinese.
 
-意图分类说明：
-1. mcp - 需要调用MCP工具进行处理的任务，如代码生成、文件操作、系统命令等
-2. qa - 普通的问答咨询，不需要特殊工具，直接回答即可
-3. rag - 需要从知识库中检索信息的任务，如文档查询、知识检索等
+Here are the definitions for each intent type:
+1.  **mcp**: Use this for tasks that require executing a tool to perform an action or a complex query. Examples: "add a to-do item", "list my tasks", "search the eino repository", "generate go code for an http server", "delete the temp file".
+2.  **rag**: Use this for when the user is asking to find or search for information within a knowledge base or documents. Examples: "search for documents about machine learning", "what does the Eino framework documentation say about agents?".
+3.  **qa**: Use this for general questions, conversations, or queries that can be answered directly without needing specific tools or document retrieval. Examples: "what is AI?", "what is the weather like today?", "tell me a joke".
 
-请严格按照以下JSON格式回复：
+Analyze the following user input and respond strictly in the JSON format below, with no other text or explanations.
+
+User Input: ` + userInput + `
+
+JSON Response format:
 {
-"type": "mcp|qa|rag",
-"confidence": 0.0-1.0,
-"explanation": "简要说明分类理由"
-}
-
-用户输入：` + userInput
+  "type": "mcp|qa|rag",
+  "confidence": 0.0-1.0,
+  "explanation": "A brief explanation for the classification."
+}`
 
 	messages := []*schema.Message{
 		{
@@ -90,6 +92,8 @@ func (ia *IntentAgent) RecognizeIntent(ctx context.Context, userInput string) (*
 		return nil, fmt.Errorf("failed to parse intent response: %w", err)
 	}
 
+	result.Input = userInput // 确保返回原始输入
+
 	return result, nil
 }
 
@@ -111,21 +115,18 @@ func parseIntentResponse(content string) (*IntentResult, error) {
 			Type:        IntentMCP,
 			Confidence:  0.85,
 			Explanation: "识别为MCP工具处理意图",
-			Input:       content,
 		}, nil
 	} else if strings.Contains(jsonStr, `"type": "rag"`) {
 		return &IntentResult{
 			Type:        IntentRAG,
 			Confidence:  0.85,
 			Explanation: "识别为RAG知识库检索意图",
-			Input:       content,
 		}, nil
 	} else if strings.Contains(jsonStr, `"type": "qa"`) {
 		return &IntentResult{
 			Type:        IntentQA,
 			Confidence:  0.85,
 			Explanation: "识别为普通问答意图",
-			Input:       content,
 		}, nil
 	}
 
@@ -142,11 +143,12 @@ func parseIntentFallback(content string) (*IntentResult, error) {
 	explanation := "基于关键词匹配的意图分类"
 
 	// 关键词匹配逻辑
-	if strings.Contains(content, "生成") || strings.Contains(content, "代码") || 
+	if strings.Contains(content, "待办") || strings.Contains(content, "任务") || strings.Contains(content, "添加") ||
+	   strings.Contains(content, "生成") || strings.Contains(content, "代码") ||
 	   strings.Contains(content, "文件") || strings.Contains(content, "命令") ||
 	   strings.Contains(content, "mcp") {
 		intentType = IntentMCP
-		explanation = "包含代码生成或文件操作关键词"
+		explanation = "包含工具调用或任务管理关键词"
 	} else if strings.Contains(content, "知识库") || strings.Contains(content, "文档") ||
 	           strings.Contains(content, "查找") || strings.Contains(content, "检索") ||
 	           strings.Contains(content, "rag") {
@@ -161,7 +163,6 @@ func parseIntentFallback(content string) (*IntentResult, error) {
 		Type:        intentType,
 		Confidence:  confidence,
 		Explanation:  explanation,
-		Input:        content,
 	}, nil
 }
 

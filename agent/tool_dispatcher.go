@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -70,44 +71,75 @@ func (td *ToolDispatcher) DispatchByIntent(ctx context.Context, intent IntentTyp
 
 // handleMCPIntent 处理MCP工具意图
 func (td *ToolDispatcher) handleMCPIntent(ctx context.Context, userInput string) (interface{}, error) {
-	// 直接调用MCP工具，不使用复杂的Chain结构
-	// 根据用户输入选择合适的工具
-	var result string
-	var toolUsed string
-	var err error
-	
-	// 简单的工具选择逻辑
-	if strings.Contains(strings.ToLower(userInput), "添加") || strings.Contains(strings.ToLower(userInput), "add") {
-		addTool := &tool.AddTodoTool{}
-		toolArgs := `{"content": "` + userInput + `"}`
-		result, err = addTool.InvokableRun(ctx, toolArgs)
-		toolUsed = "add_todo"
-	} else if strings.Contains(strings.ToLower(userInput), "列表") || strings.Contains(strings.ToLower(userInput), "list") {
-		listTool := &tool.ListTodoTool{}
-		toolArgs := `{}`
-		result, err = listTool.InvokableRun(ctx, toolArgs)
-		toolUsed = "list_todo"
-	} else if strings.Contains(strings.ToLower(userInput), "搜索") || strings.Contains(strings.ToLower(userInput), "search") {
-		searchTool := &tool.SearchRepoTool{}
-		toolArgs := `{"repo_name": "eino"}`
-		result, err = searchTool.InvokableRun(ctx, toolArgs)
-		toolUsed = "search_repo"
-	} else {
-		// 默认使用添加待办工具
-		addTool := &tool.AddTodoTool{}
-		toolArgs := `{"content": "` + userInput + `"}`
-		result, err = addTool.InvokableRun(ctx, toolArgs)
-		toolUsed = "add_todo"
-	}
-	
+	// 1. Build the prompt for the LLM to select a tool and extract arguments.
+	prompt, err := td.buildToolSelectionPrompt(userInput)
 	if err != nil {
-		return nil, fmt.Errorf("failed to invoke MCP tool: %w", err)
+		return nil, fmt.Errorf("failed to build tool selection prompt: %w", err)
 	}
-	
+
+	// 2. Call the LLM. We can reuse the qaModel for this.
+	messages := []*schema.Message{
+		{Role: schema.System, Content: prompt},
+	}
+	response, err := td.qaModel.Generate(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("tool selection LLM call failed: %w", err)
+	}
+
+	// 3. Parse the LLM's response to get the tool name and arguments.
+	var toolSelection struct {
+		ToolName string          `json:"tool_name"`
+		ToolArgs json.RawMessage `json:"tool_args"`
+	}
+
+	jsonStr := extractJSON(response.Content)
+	if jsonStr == "" {
+		// Fallback to QA if the model doesn't return valid JSON
+		return td.handleQAIntent(ctx, userInput)
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &toolSelection); err != nil {
+		// Fallback to QA if JSON parsing fails
+		return td.handleQAIntent(ctx, userInput)
+	}
+
+	if toolSelection.ToolName == "none" || toolSelection.ToolName == "" {
+		// If LLM decides no tool is suitable, fallback to QA.
+		return td.handleQAIntent(ctx, userInput)
+	}
+
+	// 4. Find the selected tool.
+	var selectedTool einotool.BaseTool
+	for _, t := range td.mcpTools {
+		info, _ := t.Info(ctx)
+		if info.Name == toolSelection.ToolName {
+			selectedTool = t
+			break
+		}
+	}
+
+	if selectedTool == nil {
+		// If tool is not found, maybe the model hallucinated. Fallback to QA.
+		return td.handleQAIntent(ctx, userInput)
+	}
+
+	// 5. Invoke the tool with the extracted arguments.
+	invokableTool, ok := selectedTool.(interface {
+		InvokableRun(ctx context.Context, argumentsInJSON string, opts ...einotool.Option) (string, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("tool %s is not invokable", toolSelection.ToolName)
+	}
+	result, err := invokableTool.InvokableRun(ctx, string(toolSelection.ToolArgs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to invoke tool %s: %w", toolSelection.ToolName, err)
+	}
+
+	// 6. Return the result.
 	return map[string]interface{}{
 		"type":       "mcp",
 		"result":     result,
-		"tool_used":  toolUsed,
+		"tool_used":  toolSelection.ToolName,
 		"user_input": userInput,
 	}, nil
 }
@@ -249,6 +281,54 @@ func CreateCompleteGraph(ctx context.Context) (*compose.Graph[string, interface{
 	}
 
 	return g, nil
+}
+
+// buildToolSelectionPrompt builds the prompt for the LLM.
+func (td *ToolDispatcher) buildToolSelectionPrompt(userInput string) (string, error) {
+	toolInfos := []string{}
+	for _, t := range td.mcpTools {
+		info, err := t.Info(context.Background())
+		if err != nil {
+			continue // Or handle error
+		}
+		argsBytes, err := json.Marshal(info.ParamsOneOf)
+		if err != nil {
+			continue // Or handle error
+		}
+		toolInfos = append(toolInfos, fmt.Sprintf("- Tool Name: %s\n  Description: %s\n  Arguments (JSON Schema): %s", info.Name, info.Desc, string(argsBytes)))
+	}
+
+	prompt := fmt.Sprintf(`You are an expert at selecting the right tool and extracting its arguments from a user's request.
+Given the user's input, choose the most appropriate tool from the list below and provide the arguments as a JSON object.
+
+Available Tools:
+%s
+
+User Input: "%s"
+
+Respond ONLY with a single JSON object in the following format, without any other text or explanation.
+{
+  "tool_name": "the_name_of_the_tool",
+  "tool_args": { "arg1": "value1", "arg2": "value2" }
+}
+If no tool is suitable, respond with:
+{
+  "tool_name": "none",
+  "tool_args": {}
+}
+`, strings.Join(toolInfos, "\n\n"), userInput)
+
+	return prompt, nil
+}
+
+// extractJSON finds and returns the first valid JSON object from a string.
+func extractJSON(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start == -1 || end == -1 || end < start {
+		return ""
+	}
+	return s[start : end+1]
 }
 
 // formatMessagesContent 格式化消息内容
