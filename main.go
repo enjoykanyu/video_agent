@@ -26,8 +26,12 @@ func main() {
 
 	// 初始化RAG知识库
 	fmt.Println("📚 初始化RAG知识库...")
-	rag.InitKnowledgeBase() //- 函数不存在，已注释
-	fmt.Println("✅ RAG知识库初始化完成")
+	if err := rag.InitKnowledgeBase(context.Background()); err != nil {
+		// 暂时不处理错误，因为es8和ollama可能未启动，后续运行若需要再处理
+		fmt.Printf("⚠️  RAG知识库初始化失败 (可忽略): %v\n", err)
+	} else {
+		fmt.Println("✅ RAG知识库初始化完成")
+	}
 	fmt.Println()
 
 	// 测试意图识别
@@ -64,7 +68,6 @@ func testIntentRecognition() {
 		"搜索关于机器学习的资料",
 		"随便问点什么",
 	}
-	
 	for _, input := range testCases {
 		result, err := agent.RecognizeIntentAPI(ctx, input)
 		if err != nil {

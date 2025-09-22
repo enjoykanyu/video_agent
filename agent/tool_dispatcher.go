@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"video_agent/rag"
 	"video_agent/tool"
 
 	"github.com/cloudwego/eino-ext/components/model/ollama"
@@ -17,9 +16,9 @@ import (
 
 // ToolDispatcher 工具调度器
 type ToolDispatcher struct {
-	mcpTools   []einotool.BaseTool
-	qaModel    *ollama.ChatModel
-	ragTools   []einotool.BaseTool // RAG工具（后续实现）
+	mcpTools []einotool.BaseTool
+	qaModel  *ollama.ChatModel
+	ragTools []einotool.BaseTool // RAG工具（后续实现）
 }
 
 // NewToolDispatcher 创建新的工具调度器
@@ -41,7 +40,7 @@ func NewToolDispatcher(ctx context.Context) (*ToolDispatcher, error) {
 	}
 
 	// 初始化RAG工具
-	ragTool, err := rag.CreateRAGTool(ctx, "./data/rag_store")
+	ragTool, err := rag.CreateRAGTool(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create RAG tool: %w", err)
 	}
@@ -216,10 +215,7 @@ func getToolNames(tools []einotool.BaseTool) []string {
 		case *tool.SearchRepoTool:
 			names = append(names, "search_repo")
 		default:
-			// 处理RAG工具
-			if _, ok := t.(*rag.RAGTool); ok {
-				names = append(names, "rag_knowledge_base")
-			}
+			// RAG工具的名称是通过Info()方法动态获取的，这里无需硬编码
 		}
 	}
 	return names
@@ -257,9 +253,9 @@ func CreateCompleteGraph(ctx context.Context) (*compose.Graph[string, interface{
 
 		// 3. 返回完整结果
 		return map[string]interface{}{
-			"intent":     intentResult,
+			"intent":      intentResult,
 			"tool_result": result,
-			"user_input": input,
+			"user_input":  input,
 		}, nil
 	})
 
@@ -336,13 +332,11 @@ func formatMessagesContent(messages []*schema.Message) string {
 	if len(messages) == 0 {
 		return "无响应内容"
 	}
-	
+
 	// 获取最后一条消息的内容
 	lastMessage := messages[len(messages)-1]
 	return lastMessage.Content
 }
-
-
 
 // TestToolDispatcher 测试工具调度功能
 func TestToolDispatcher() {
