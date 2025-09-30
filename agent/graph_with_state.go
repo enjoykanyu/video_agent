@@ -12,7 +12,7 @@ package agent
 // 	}
 // }
 
-// func OrcGraphWithState(ctx context.Context, input map[string]string) {
+// func OrcGraphWithState1(ctx context.Context, input map[string]string) {
 // 	g := compose.NewGraph[map[string]string, *schema.Message](
 // 		compose.WithGenLocalState(genFunc),
 // 	)
@@ -112,33 +112,33 @@ package agent
 // 		return "test1", nil
 // 	}, map[string]bool{"test1": true, "test2": true}))
 
-//		//链接节点
-//		err = g.AddEdge(compose.START, "lambda")
-//		if err != nil {
-//			panic(err)
-//		}
-//		err = g.AddEdge("test1", "model")
-//		if err != nil {
-//			panic(err)
-//		}
-//		err = g.AddEdge("test2", "model")
-//		if err != nil {
-//			panic(err)
-//		}
-//		err = g.AddEdge("model", compose.END)
-//		if err != nil {
-//			panic(err)
-//		}
-//		//编译
-//		r, err := g.Compile(ctx)
-//		if err != nil {
-//			panic(err)
-//		}
-//		//执行
-//		answer, err := r.Invoke(ctx, input)
-//		if err != nil {
-//			panic(err)
-//		}
-//		fmt.Println(answer.Content)
-//	}
-//}
+// 		//链接节点
+// 		err = g.AddEdge(compose.START, "lambda")
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		err = g.AddEdge("test1", "model")
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		err = g.AddEdge("test2", "model")
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		err = g.AddEdge("model", compose.END)
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		//编译
+// 		r, err := g.Compile(ctx)
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		//执行
+// 		answer, err := r.Invoke(ctx, input)
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		fmt.Println(answer.Content)
+// 	}
+// }
