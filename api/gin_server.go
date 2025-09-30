@@ -8,8 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/compose"
 	"github.com/gin-gonic/gin"
-
-	"video_agent/agent"
+	// "video_agent/agent"
 )
 
 // GinServer Gin HTTP服务器
@@ -21,18 +20,18 @@ type GinServer struct {
 // NewGinServer 创建新的Gin服务器
 func NewGinServer() *GinServer {
 	g := compose.NewGraph[string, interface{}]()
-	
+
 	// 创建完整工作流
-	agent.SetupCompleteWorkflow(g)
-	
+	// agent.SetupCompleteWorkflow(g)
+
 	// 创建Gin路由
 	router := gin.Default()
-	
+
 	// 添加中间件
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 	router.Use(CORSMiddleware())
-	
+
 	return &GinServer{
 		router: router,
 		graph:  g,
@@ -46,12 +45,12 @@ func CORSMiddleware() gin.HandlerFunc {
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-		
+
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
 		}
-		
+
 		c.Next()
 	}
 }
@@ -83,7 +82,7 @@ func (s *GinServer) ProcessInput(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// 执行Graph工作流
 	ctx := context.Background()
 	compiledGraph, err := s.graph.Compile(ctx)
@@ -95,7 +94,7 @@ func (s *GinServer) ProcessInput(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	result, err := compiledGraph.Invoke(ctx, req.Input)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ResponsePayload{
@@ -105,7 +104,7 @@ func (s *GinServer) ProcessInput(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// 将结果转换为字符串
 	var outputStr string
 	switch v := result.(type) {
@@ -114,7 +113,7 @@ func (s *GinServer) ProcessInput(c *gin.Context) {
 	default:
 		outputStr = fmt.Sprintf("%v", v)
 	}
-	
+
 	c.JSON(http.StatusOK, ResponsePayload{
 		Success:   true,
 		Output:    outputStr,
@@ -135,7 +134,7 @@ func (s *GinServer) HealthCheck(c *gin.Context) {
 		"version":   "1.0.0",
 		"services": []string{
 			"intent_agent",
-			"tool_dispatcher", 
+			"tool_dispatcher",
 			"rag_knowledge_base",
 			"graph_workflow",
 		},
@@ -147,7 +146,7 @@ func (s *GinServer) GetGraphInfo(c *gin.Context) {
 	graphInfo := map[string]interface{}{
 		"nodes": []string{
 			"start",
-			"intent_recognition", 
+			"intent_recognition",
 			"mcp_tool",
 			"qa_tool",
 			"rag_tool",
@@ -164,7 +163,7 @@ func (s *GinServer) GetGraphInfo(c *gin.Context) {
 		},
 		"workflow": "用户输入 → 意图识别 → 工具分流 → 结果输出",
 	}
-	
+
 	c.JSON(http.StatusOK, graphInfo)
 }
 
@@ -177,7 +176,7 @@ func (s *GinServer) SetupRoutes() {
 		api.GET("/health", s.HealthCheck)
 		api.GET("/graph/info", s.GetGraphInfo)
 	}
-	
+
 	// 文档路由
 	s.router.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -200,6 +199,6 @@ func (s *GinServer) Start(addr string) error {
 	fmt.Printf("📊 健康检查: http://%s/api/v1/health\n", addr)
 	fmt.Printf("🔧 Graph信息: http://%s/api/v1/graph/info\n", addr)
 	fmt.Printf("🎯 处理接口: POST http://%s/api/v1/process\n", addr)
-	
+
 	return s.router.Run(addr)
 }
