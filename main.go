@@ -1,20 +1,39 @@
 package main
 
 import (
-	// "context"
-	// "fmt"
-	// "log"
-	// "os"
-	// "os/signal"
-	// "syscall"
-	// "time"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"video_agent/agent"
 	// "video_agent/api"
 )
 
 func main() {
-	agent.NewGraphWithModel()
+	fmt.Println("🚀 启动基于Eino框架的RAG多智能体系统...")
+	fmt.Println("📋 系统组件:")
+	fmt.Println("  • RAG知识库管理器")
+	fmt.Println("  • 向量相似度搜索")
+	fmt.Println("  • Graph工作流编排")
+	fmt.Println("  • Ollama模型集成")
+	fmt.Println()
+
+	// 测试基础RAG功能
+	fmt.Println("🔍 测试基础RAG功能...")
+	testBasicRAG()
+	fmt.Println()
+
+	// 测试高级RAG功能
+	fmt.Println("🎯 测试高级RAG功能...")
+	testAdvancedRAG()
+	fmt.Println()
+
+	// 保持程序运行，等待用户输入
+	fmt.Println("💡 系统运行中，按 Ctrl+C 退出...")
+	waitForExit()
 	// fmt.Println("🚀 启动多智能体系统...")
 	// fmt.Println("📋 系统组件:")
 	// fmt.Println("  • 意图识别Agent")
@@ -172,10 +191,59 @@ func main() {
 // 	<-ctx.Done()
 // }
 
+// testBasicRAG 测试基础RAG功能
+func testBasicRAG() {
+	config := &agent.RAGConfig{
+		VectorStorePath: "./data/vector_store/documents.json",
+		RAGStorePath:    "./data/rag_store/documents.json",
+		TopK:            3,
+		ModelName:       "qwen3:0.6b",
+		BaseURL:         "http://localhost:11434",
+	}
+
+	if err := agent.NewRAGGraph(config); err != nil {
+		fmt.Printf("❌ 基础RAG测试失败: %v\n", err)
+		return
+	}
+	fmt.Println("✅ 基础RAG功能测试完成")
+}
+
+// testAdvancedRAG 测试高级RAG功能
+func testAdvancedRAG() {
+	config := &agent.RAGConfig{
+		VectorStorePath: "./data/vector_store/documents.json",
+		RAGStorePath:    "./data/rag_store/documents.json",
+		TopK:            2,
+		ModelName:       "qwen3:0.6b",
+		BaseURL:         "http://localhost:11434",
+	}
+
+	if err := agent.NewAdvancedRAGGraph(config); err != nil {
+		fmt.Printf("❌ 高级RAG测试失败: %v\n", err)
+		return
+	}
+	fmt.Println("✅ 高级RAG功能测试完成")
+}
+
+// waitForExit 等待退出信号
+func waitForExit() {
+	// 设置信号处理
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// 等待信号
+	<-sigChan
+	fmt.Println("\n🛑 接收到退出信号，正在关闭系统...")
+
+	// 给系统一些时间清理资源
+	time.Sleep(1 * time.Second)
+	fmt.Println("👋 系统已安全关闭")
+}
+
 // init 初始化函数
 func init() {
-	// fmt.Println("🐙 多智能体系统初始化中...")
-	// fmt.Println("🏗️  架构: CloudWeGo Eino + Gin + Ollama")
-	// fmt.Println("🎯 功能: 意图识别 → 工具分流 → RAG检索")
-	// fmt.Println("----------------------------------------")
+	fmt.Println("🐙 基于Eino框架的RAG多智能体系统初始化中...")
+	fmt.Println("🏗️  架构: CloudWeGo Eino + RAG + Ollama")
+	fmt.Println("🎯 功能: RAG检索 → Graph编排 → 模型生成")
+	fmt.Println("----------------------------------------")
 }
