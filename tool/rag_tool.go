@@ -49,10 +49,10 @@ func (rt *RAGTool) AddDocument(ctx context.Context, content string, metadata map
 }
 
 // 创建RAG搜索工具节点
-func CreateRAGSearchNode(ragManager *rag.RAGManager, topK int) compose.Lambda {
+func CreateRAGSearchNode(ragManager *rag.RAGManager, topK int) *compose.Lambda {
 	ragTool := NewRAGTool(ragManager, topK)
 
-	return *compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output string, err error) {
+	return compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output string, err error) {
 		query, exists := input["query"]
 		if !exists {
 			return "", fmt.Errorf("missing query parameter")
@@ -63,10 +63,10 @@ func CreateRAGSearchNode(ragManager *rag.RAGManager, topK int) compose.Lambda {
 }
 
 // 创建增强的RAG节点，直接处理消息
-func CreateEnhancedRAGNode(ragManager *rag.RAGManager, topK int) compose.Lambda {
+func CreateEnhancedRAGNode(ragManager *rag.RAGManager, topK int) *compose.Lambda {
 	ragTool := NewRAGTool(ragManager, topK)
 
-	return *compose.InvokableLambda(func(ctx context.Context, messages []*schema.Message) (output []*schema.Message, err error) {
+	return compose.InvokableLambda(func(ctx context.Context, messages []*schema.Message) (output []*schema.Message, err error) {
 		if len(messages) == 0 {
 			return messages, nil
 		}

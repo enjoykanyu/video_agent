@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/cloudwego/eino/compose"
@@ -129,8 +130,13 @@ func NewRAGGraph(config *RAGConfig) error {
 
 	fmt.Println("=== RAG图代理测试 ===")
 	fmt.Printf("输入: %s\n", testInput["query"])
+	fmt.Println("正在执行RAG检索和模型生成...")
 
-	answer, err := r.Invoke(ctx, testInput)
+	// 创建带超时的上下文
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	answer, err := r.Invoke(ctxWithTimeout, testInput)
 	if err != nil {
 		return fmt.Errorf("failed to invoke graph: %w", err)
 	}
@@ -155,15 +161,9 @@ func NewAdvancedRAGGraph(config *RAGConfig) error {
 	g := compose.NewGraph[map[string]string, *schema.Message]()
 
 	// 路由节点 - 根据输入类型决定处理方式
-	router := compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output string, err error) {
-		if input["type"] == "search" {
-			return "search", nil
-		} else if input["type"] == "chat" {
-			return "chat", nil
-		} else if input["type"] == "add_doc" {
-			return "add_doc", nil
-		}
-		return "chat", nil // 默认为聊天模式
+	router := compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output map[string]string, err error) {
+		// 直接传递输入数据，通过分支逻辑处理不同类型
+		return input, nil
 	})
 
 	// 搜索处理节点
@@ -207,10 +207,15 @@ func NewAdvancedRAGGraph(config *RAGConfig) error {
 	})
 
 	// 文档添加节点
-	addDocProcessor := compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output string, err error) {
+	addDocProcessor := compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output []*schema.Message, err error) {
 		content := input["content"]
 		if content == "" {
-			return "错误：缺少文档内容", nil
+			return []*schema.Message{
+				{
+					Role:    schema.System,
+					Content: "错误：缺少文档内容",
+				},
+			}, nil
 		}
 
 		metadata := make(map[string]interface{})
@@ -223,10 +228,20 @@ func NewAdvancedRAGGraph(config *RAGConfig) error {
 
 		err = ragManager.AddDocument(content, metadata)
 		if err != nil {
-			return fmt.Sprintf("添加文档失败: %v", err), nil
+			return []*schema.Message{
+				{
+					Role:    schema.System,
+					Content: fmt.Sprintf("添加文档失败: %v", err),
+				},
+			}, nil
 		}
 
-		return "文档添加成功", nil
+		return []*schema.Message{
+			{
+				Role:    schema.System,
+				Content: "文档添加成功",
+			},
+		}, nil
 	})
 
 	// 创建模型节点
@@ -265,30 +280,22 @@ func NewAdvancedRAGGraph(config *RAGConfig) error {
 	}
 
 	// 添加分支
-	err = g.AddBranch("router", compose.NewGraphBranch(func(ctx context.Context, in string) (endNode string, err error) {
-		return in, nil
-	}, map[string]bool{"search": true, "chat": true, "add_doc": true}))
+	err = g.AddBranch("router", compose.NewGraphBranch(func(ctx context.Context, in map[string]string) (endNode string, err error) {
+		if in["type"] == "search" {
+			return "search_processor", nil
+		} else if in["type"] == "chat" {
+			return "chat_processor", nil
+		} else if in["type"] == "add_doc" {
+			return "add_doc_processor", nil
+		}
+		return "chat_processor", nil // 默认为聊天处理
+	}, map[string]bool{"search_processor": true, "chat_processor": true, "add_doc_processor": true}))
 	if err != nil {
 		return err
 	}
 
 	// 连接边
 	err = g.AddEdge(compose.START, "router")
-	if err != nil {
-		return err
-	}
-
-	err = g.AddEdge("search", "search_processor")
-	if err != nil {
-		return err
-	}
-
-	err = g.AddEdge("chat", "chat_processor")
-	if err != nil {
-		return err
-	}
-
-	err = g.AddEdge("add_doc", "add_doc_processor")
 	if err != nil {
 		return err
 	}
