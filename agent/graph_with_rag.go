@@ -207,14 +207,12 @@ func NewAdvancedRAGGraph(config *RAGConfig) error {
 	})
 
 	// 文档添加节点
-	addDocProcessor := compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output []*schema.Message, err error) {
+	addDocProcessor := compose.InvokableLambda(func(ctx context.Context, input map[string]string) (output *schema.Message, err error) {
 		content := input["content"]
 		if content == "" {
-			return []*schema.Message{
-				{
-					Role:    schema.System,
-					Content: "错误：缺少文档内容",
-				},
+			return &schema.Message{
+				Role:    schema.System,
+				Content: "错误：缺少文档内容",
 			}, nil
 		}
 
@@ -228,19 +226,15 @@ func NewAdvancedRAGGraph(config *RAGConfig) error {
 
 		err = ragManager.AddDocument(content, metadata)
 		if err != nil {
-			return []*schema.Message{
-				{
-					Role:    schema.System,
-					Content: fmt.Sprintf("添加文档失败: %v", err),
-				},
+			return &schema.Message{
+				Role:    schema.System,
+				Content: fmt.Sprintf("添加文档失败: %v", err),
 			}, nil
 		}
 
-		return []*schema.Message{
-			{
-				Role:    schema.System,
-				Content: "文档添加成功",
-			},
+		return &schema.Message{
+			Role:    schema.System,
+			Content: "文档添加成功",
 		}, nil
 	})
 
