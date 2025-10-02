@@ -2,37 +2,56 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
-	"video_agent/agent"
+	"github.com/cloudwego/eino/schema"
+	"video_agent/rag"
 	// "video_agent/api"
 )
 
 func main() {
 	fmt.Println("🚀 启动基于Eino框架的RAG多智能体系统...")
 	fmt.Println("📋 系统组件:")
-	fmt.Println("  • RAG知识库管理器")
+	fmt.Println("  • Eino RAG管理器 (Ollama + Elasticsearch)")
 	fmt.Println("  • 向量相似度搜索")
 	fmt.Println("  • Graph工作流编排")
 	fmt.Println("  • Ollama模型集成")
 	fmt.Println()
 
-	// 测试基础RAG功能
-	fmt.Println("🔍 测试基础RAG功能...")
-	testBasicRAG()
+	// 测试Eino RAG功能
+	fmt.Println("🔍 测试Eino RAG功能...")
+	// testEinoRAG()
 	fmt.Println()
 
-	// 测试高级RAG功能
-	fmt.Println("🎯 测试高级RAG功能...")
-	testAdvancedRAG()
+	// 测试基础RAG功能
+	fmt.Println("🔍 测试基础RAG功能...")
+	// testBasicRAG()
 	fmt.Println()
+	docs := []*schema.Document{
+		{
+			ID:      "1",
+			Content: "你说得对。但是原神是一款二次元开放大世界游戏",
+			MetaData: map[string]any{
+				"author": "木乔",
+			},
+		},
+	}
+	rag.IndexerRAG(docs)
+	// // 测试Eino RAG功能V2
+	// fmt.Println("🔍 测试Eino RAG功能V2...")
+	// testEinoRAGV2()
+	// fmt.Println()
+
+	// // 测试高级RAG功能
+	// fmt.Println("🎯 测试高级RAG功能...")
+	// testAdvancedRAG()
+
+	// // 测试高级Eino RAG功能V2
+	// fmt.Println("🎯 测试高级Eino RAG功能V2...")
+	// testAdvancedEinoRAGV2()
+	// fmt.Println()
 
 	// 保持程序运行，等待用户输入
 	fmt.Println("💡 系统运行中，按 Ctrl+C 退出...")
-	waitForExit()
+	// waitForExit()
 	// fmt.Println("🚀 启动多智能体系统...")
 	// fmt.Println("📋 系统组件:")
 	// fmt.Println("  • 意图识别Agent")
@@ -190,59 +209,118 @@ func main() {
 // 	<-ctx.Done()
 // }
 
-// testBasicRAG 测试基础RAG功能
-func testBasicRAG() {
-	config := &agent.RAGConfig{
-		VectorStorePath: "./data/vector_store/documents.json",
-		RAGStorePath:    "./data/rag_store/documents.json",
-		TopK:            3,
-		ModelName:       "qwen3:0.6b",
-		BaseURL:         "http://localhost:11434",
-	}
+// // testEinoRAG 测试Eino RAG功能
+// func testEinoRAG() {
+// 	config := &agent.EinoRAGConfig{
+// 		ESAddresses: []string{"http://localhost:9200"},
+// 		ESIndexName: "eino_rag_demo",
+// 		OllamaHost:  "http://localhost:11434",
+// 		ModelName:   "nomic-embed-text",
+// 		TopK:        3,
+// 	}
 
-	if err := agent.NewRAGGraph(config); err != nil {
-		fmt.Printf("❌ 基础RAG测试失败: %v\n", err)
-		return
-	}
-	fmt.Println("✅ 基础RAG功能测试完成")
-}
+// 	fmt.Println("🚀 初始化Eino RAG图代理...")
+// 	if err := agent.NewEinoRAGGraph(config); err != nil {
+// 		fmt.Printf("❌ Eino RAG图代理初始化失败: %v\n", err)
+// 		fmt.Println("💡 提示: 请确保Elasticsearch和Ollama服务已启动")
+// 		fmt.Println("   • Elasticsearch: docker run -d -p 9200:9200 -e \"discovery.type=single-node\" elasticsearch:8.8.0")
+// 		fmt.Println("   • Ollama: curl -fsSL https://ollama.com/install.sh | sh && ollama pull nomic-embed-text")
+// 	} else {
+// 		fmt.Println("✅ Eino RAG图代理初始化成功")
+// 	}
+// }
 
-// testAdvancedRAG 测试高级RAG功能
-func testAdvancedRAG() {
-	config := &agent.RAGConfig{
-		VectorStorePath: "./data/vector_store/documents.json",
-		RAGStorePath:    "./data/rag_store/documents.json",
-		TopK:            2,
-		ModelName:       "qwen3:0.6b",
-		BaseURL:         "http://localhost:11434",
-	}
+// // testBasicRAG 测试基础RAG功能
+// func testBasicRAG() {
+// 	config := &agent.RAGConfig{
+// 		VectorStorePath: "./data/vector_store/documents.json",
+// 		RAGStorePath:    "./data/rag_store/documents.json",
+// 		TopK:            3,
+// 		ModelName:       "qwen3:0.6b",
+// 		BaseURL:         "http://localhost:11434",
+// 	}
 
-	if err := agent.NewAdvancedRAGGraph(config); err != nil {
-		fmt.Printf("❌ 高级RAG测试失败: %v\n", err)
-		return
-	}
-	fmt.Println("✅ 高级RAG功能测试完成")
-}
+// 	if err := agent.NewRAGGraph(config); err != nil {
+// 		fmt.Printf("❌ 基础RAG测试失败: %v\n", err)
+// 		return
+// 	}
+// 	fmt.Println("✅ 基础RAG功能测试完成")
+// }
 
-// waitForExit 等待退出信号
-func waitForExit() {
-	// 设置信号处理
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+// // testAdvancedRAG 测试高级RAG功能
+// func testAdvancedRAG() {
+// 	config := &agent.RAGConfig{
+// 		VectorStorePath: "./data/vector_store/documents.json",
+// 		RAGStorePath:    "./data/rag_store/documents.json",
+// 		TopK:            2,
+// 		ModelName:       "qwen3:0.6b",
+// 		BaseURL:         "http://localhost:11434",
+// 	}
 
-	// 等待信号
-	<-sigChan
-	fmt.Println("\n🛑 接收到退出信号，正在关闭系统...")
+// 	if err := agent.NewAdvancedRAGGraph(config); err != nil {
+// 		fmt.Printf("❌ 高级RAG测试失败: %v\n", err)
+// 		return
+// 	}
+// 	fmt.Println("✅ 高级RAG功能测试完成")
+// }
 
-	// 给系统一些时间清理资源
-	time.Sleep(1 * time.Second)
-	fmt.Println("👋 系统已安全关闭")
-}
+// // waitForExit 等待退出信号
+// func waitForExit() {
+// 	// 设置信号处理
+// 	sigChan := make(chan os.Signal, 1)
+// 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-// init 初始化函数
-func init() {
-	fmt.Println("🐙 基于Eino框架的RAG多智能体系统初始化中...")
-	fmt.Println("🏗️  架构: CloudWeGo Eino + RAG + Ollama")
-	fmt.Println("🎯 功能: RAG检索 → Graph编排 → 模型生成")
-	fmt.Println("----------------------------------------")
-}
+// 	// 等待信号
+// 	<-sigChan
+// 	fmt.Println("\n🛑 接收到退出信号，正在关闭系统...")
+
+// 	// 给系统一些时间清理资源
+// 	time.Sleep(1 * time.Second)
+// 	fmt.Println("👋 系统已安全关闭")
+// }
+
+// // testEinoRAGV2 测试Eino RAG功能V2
+// func testEinoRAGV2() {
+// 	config := &agent.EinoRAGConfigV2{
+// 		ESAddresses: []string{"http://localhost:9200"},
+// 		ESIndexName: "eino_rag_v2",
+// 		OllamaHost:  "http://localhost:11434",
+// 		EmbedModel:  "nomic-embed-text",
+// 		ChatModel:   "llama3.2",
+// 		TopK:        5,
+// 	}
+
+// 	if err := agent.NewEinoRAGGraphV2(config); err != nil {
+// 		fmt.Printf("❌ Eino RAG V2测试失败: %v\n", err)
+// 		return
+// 	}
+
+// 	fmt.Println("✅ Eino RAG V2测试完成")
+// }
+
+// // testAdvancedEinoRAGV2 测试高级Eino RAG功能V2
+// func testAdvancedEinoRAGV2() {
+// 	config := &agent.EinoRAGConfigV2{
+// 		ESAddresses: []string{"http://localhost:9200"},
+// 		ESIndexName: "advanced_eino_rag_v2",
+// 		OllamaHost:  "http://localhost:11434",
+// 		EmbedModel:  "nomic-embed-text",
+// 		ChatModel:   "llama3.2",
+// 		TopK:        3,
+// 	}
+
+// 	if err := agent.NewAdvancedEinoRAGGraphV2(config); err != nil {
+// 		fmt.Printf("❌ 高级Eino RAG V2测试失败: %v\n", err)
+// 		return
+// 	}
+
+// 	fmt.Println("✅ 高级Eino RAG V2测试完成")
+// }
+
+// // init 初始化函数
+// func init() {
+// 	fmt.Println("🐙 基于Eino框架的RAG多智能体系统初始化中...")
+// 	fmt.Println("🏗️  架构: CloudWeGo Eino + RAG + Ollama")
+// 	fmt.Println("🎯 功能: RAG检索 → Graph编排 → 模型生成")
+// 	fmt.Println("----------------------------------------")
+// }
