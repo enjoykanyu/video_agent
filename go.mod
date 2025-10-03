@@ -6,11 +6,13 @@ toolchain go1.24.7
 
 require (
 	github.com/cloudwego/eino v0.5.4
+	github.com/cloudwego/eino-ext/components/document/transformer/splitter/markdown v0.0.0-20250929071429-e7650d831a09
 	github.com/cloudwego/eino-ext/components/embedding/ollama v0.0.0-20250929071429-e7650d831a09
 	github.com/cloudwego/eino-ext/components/indexer/milvus v0.0.0-20250929071429-e7650d831a09
 	github.com/cloudwego/eino-ext/components/model/ollama v0.1.3
 	github.com/cloudwego/eino-ext/components/retriever/milvus v0.0.0-20250929071429-e7650d831a09
 	github.com/gin-gonic/gin v1.10.1
+	github.com/google/uuid v1.6.0
 	github.com/milvus-io/milvus-sdk-go/v2 v2.4.2
 )
 
@@ -39,7 +41,6 @@ require (
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/invopop/yaml v0.1.0 // indirect

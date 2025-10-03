@@ -36,6 +36,7 @@ func main() {
 	}
 	rag.IndexerRAG(docs)
 	rag.RetrieverRAG("测试下")
+	rag.TransDoc()
 	// // 测试Eino RAG功能V2
 	// fmt.Println("🔍 测试Eino RAG功能V2...")
 	// testEinoRAGV2()

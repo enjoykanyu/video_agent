@@ -32,6 +32,8 @@ github.com/cloudwego/base64x v0.1.6 h1:t11wG9AECkCDk5fMSoxmufanudBtJ+/HemLstXDLI
 github.com/cloudwego/base64x v0.1.6/go.mod h1:OFcloc187FXDaYHvrNIjxSe8ncn0OOM8gEHfghB2IPU=
 github.com/cloudwego/eino v0.5.4 h1:rfR/zBBH4pvayZvFjYzsz//PG09gv3p2BblHSq1xU/8=
 github.com/cloudwego/eino v0.5.4/go.mod h1:XolsJjKmiA+g9Dvr1vBJxGyqCksx52Ia/O4Iq+iMmeI=
+github.com/cloudwego/eino-ext/components/document/transformer/splitter/markdown v0.0.0-20250929071429-e7650d831a09 h1:hD+ajakYSqydkB2+0SeLd6XmoYxR3ZNdPzzkL3kVZP4=
+github.com/cloudwego/eino-ext/components/document/transformer/splitter/markdown v0.0.0-20250929071429-e7650d831a09/go.mod h1:HZNxjGsgkN+1jsXdcKR8TwnE7J3W5C8aqX/hwWyAOoU=
 github.com/cloudwego/eino-ext/components/embedding/ollama v0.0.0-20250929071429-e7650d831a09 h1:xx7LbRXiBCJHGR0vDbUpePt2iSmgzOyGRp9Y1KtIbF8=
 github.com/cloudwego/eino-ext/components/embedding/ollama v0.0.0-20250929071429-e7650d831a09/go.mod h1:nav79aUcd+UR24dLA+7l7RcHCMlg26zbDAKvjONdrw0=
 github.com/cloudwego/eino-ext/components/indexer/milvus v0.0.0-20250929071429-e7650d831a09 h1:N77BTFYjIARLiNPytM5JmmLsVMzm7EF84LJhRbR8g9I=
