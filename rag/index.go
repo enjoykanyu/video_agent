@@ -72,12 +72,14 @@ func IndexerRAG(docs []*schema.Document) {
 				MetaData: doc.MetaData,
 			},
 		}
-		ids, err := indexer.Store(ctx, storeDoc)
+		fmt.Println("开始存储")
+		fmt.Println(doc.ID)
+		_, err := indexer.Store(ctx, storeDoc)
 		if err != nil {
 			log.Fatalf("Failed to store documents: %v", err)
 		}
 		//println("Stored documents with IDs: %v", ids)
-		fmt.Print(ids)
+		//fmt.Print(ids)
 	}
 }
 

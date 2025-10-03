@@ -35,7 +35,9 @@ func main() {
 	//}
 	//rag.IndexerRAG(docs)
 	//rag.RetrieverRAG("测试下")
-	rag.TransDoc()
+	docs := rag.TransDoc()
+	rag.IndexerRAG(docs)
+	rag.RetrieverRAG("哈哈哈")
 	// // 测试Eino RAG功能V2
 	// fmt.Println("🔍 测试Eino RAG功能V2...")
 	// testEinoRAGV2()

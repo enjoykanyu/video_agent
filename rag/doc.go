@@ -2,12 +2,11 @@ package rag
 
 import (
 	"context"
-	"os"
-	"strconv"
-
+	"fmt"
 	"github.com/cloudwego/eino-ext/components/document/transformer/splitter/markdown"
 	"github.com/cloudwego/eino/schema"
-	"github.com/google/uuid"
+	"os"
+	"strconv"
 )
 
 func TransDoc() []*schema.Document {
@@ -38,21 +37,24 @@ func TransDoc() []*schema.Document {
 	}
 	docs := []*schema.Document{
 		{
-			ID:      uuid.New().String(),
+			ID:      "doc1", //uuid.New().String(),
 			Content: string(bs),
 		},
 	}
 
 	// 执行分割
 	results, err := splitter.Transform(ctx, docs)
+	for k, doc := range results {
+		doc.ID = results[0].ID + "_" + strconv.Itoa(k)
+		fmt.Println(doc.ID)
+	}
 	if err != nil {
 		panic(err)
 	}
 
-	for i, doc := range results {
-		doc.ID = docs[0].ID + "_" + strconv.Itoa(i)
-		println("片段i", i, "内容content", doc.Content)
-		println(doc.ID)
+	for _, doc := range results {
+		//println("片段i", i, "内容content", doc.Content)
+		//println(doc.ID)
 		for k, v := range doc.MetaData {
 			if k == "h1" || k == "h3" {
 				println("标题", k, "文字", v)
