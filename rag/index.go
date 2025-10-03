@@ -22,8 +22,8 @@ var fields = []*entity.Field{
 		PrimaryKey: true,
 	},
 	{
-		Name:     "vector",                    // 确保字段名匹配
-		DataType: entity.FieldTypeFloatVector, // nomic-embed-text 返回浮点向量
+		Name:     "vector",                     // 确保字段名匹配
+		DataType: entity.FieldTypeBinaryVector, // qwen3-embedding:0.6b
 		TypeParams: map[string]string{
 			"dim": "768", // nomic-embed-text 正确维度
 		},
@@ -46,7 +46,7 @@ func IndexerRAG(docs []*schema.Document) {
 	// 初始化嵌入器
 	embedder, err := ollama.NewEmbedder(ctx, &ollama.EmbeddingConfig{
 		BaseURL: "http://localhost:11434",
-		Model:   "nomic-embed-text:v1.5",
+		Model:   "qwen3-embedding:0.6b",
 		Timeout: 10 * time.Second,
 	})
 	if err != nil {
