@@ -51,7 +51,13 @@ func TransDoc() []*schema.Document {
 
 	for i, doc := range results {
 		doc.ID = docs[0].ID + "_" + strconv.Itoa(i)
+		println("片段i", i, "内容content", doc.Content)
 		println(doc.ID)
+		for k, v := range doc.MetaData {
+			if k == "h1" || k == "h3" {
+				println("标题", k, "文字", v)
+			}
+		}
 	}
 
 	return results
