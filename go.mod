@@ -9,6 +9,7 @@ require (
 	github.com/cloudwego/eino-ext/components/embedding/ollama v0.0.0-20250929071429-e7650d831a09
 	github.com/cloudwego/eino-ext/components/indexer/milvus v0.0.0-20250929071429-e7650d831a09
 	github.com/cloudwego/eino-ext/components/model/ollama v0.1.3
+	github.com/cloudwego/eino-ext/components/retriever/milvus v0.0.0-20250929071429-e7650d831a09
 	github.com/gin-gonic/gin v1.10.1
 	github.com/milvus-io/milvus-sdk-go/v2 v2.4.2
 )
@@ -76,7 +77,7 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	google.golang.org/genproto v0.0.0-20220503193339-ba3ae3f07e29 // indirect
+	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
