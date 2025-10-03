@@ -27,8 +27,8 @@ func main() {
 	fmt.Println()
 	docs := []*schema.Document{
 		{
-			ID:      "1",
-			Content: "你说得对。但是原神是一款二次元开放大世界游戏",
+			ID:      "2",
+			Content: "哈哈哈",
 			MetaData: map[string]any{
 				"author": "木乔",
 			},

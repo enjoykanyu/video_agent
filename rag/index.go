@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var collection = "test_rag"
+var collection = "test_index"
 
 var fields = []*entity.Field{
 	{
@@ -25,7 +25,7 @@ var fields = []*entity.Field{
 		Name:     "vector",                     // 确保字段名匹配
 		DataType: entity.FieldTypeBinaryVector, // qwen3-embedding:0.6b
 		TypeParams: map[string]string{
-			"dim": "768", // nomic-embed-text 正确维度
+			"dim": "32768", //  qwen3-embedding:0.6b正确维度
 		},
 	},
 	{
@@ -54,11 +54,11 @@ func IndexerRAG(docs []*schema.Document) {
 	}
 
 	indexer, err := milvus.NewIndexer(ctx, &milvus.IndexerConfig{
-		Client:            MilvusCli,
-		Collection:        collection,
-		Fields:            fields,
-		Embedding:         embedder,
-		DocumentConverter: binaryDocumentConverter,
+		Client:     MilvusCli,
+		Collection: collection,
+		Fields:     fields,
+		Embedding:  embedder,
+		//DocumentConverter: binaryDocumentConverter,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create indexer: %v", err)
