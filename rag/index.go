@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"fmt"
 	"github.com/cloudwego/eino-ext/components/embedding/ollama"
 	"github.com/cloudwego/eino-ext/components/indexer/milvus"
 	"github.com/cloudwego/eino/schema"
@@ -75,7 +76,8 @@ func IndexerRAG(docs []*schema.Document) {
 		if err != nil {
 			log.Fatalf("Failed to store documents: %v", err)
 		}
-		println("Stored documents with IDs: %v", ids)
+		//println("Stored documents with IDs: %v", ids)
+		fmt.Print(ids)
 	}
 }
 

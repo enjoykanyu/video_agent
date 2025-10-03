@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/cloudwego/eino/schema"
 	"video_agent/rag"
 	// "video_agent/api"
 )
@@ -24,17 +25,17 @@ func main() {
 	fmt.Println("🔍 测试基础RAG功能...")
 	// testBasicRAG()
 	fmt.Println()
-	//docs := []*schema.Document{
-	//	{
-	//		ID:      "2",
-	//		Content: "哈哈哈",
-	//		MetaData: map[string]any{
-	//			"author": "木乔",
-	//		},
-	//	},
-	//}
-	//rag.IndexerRAG(docs)
-	rag.RetrieverRAG("哈哈哈")
+	docs := []*schema.Document{
+		{
+			ID:      "9",
+			Content: "测试下",
+			MetaData: map[string]any{
+				"author": "哈哈哈",
+			},
+		},
+	}
+	rag.IndexerRAG(docs)
+	rag.RetrieverRAG("测试下")
 	// // 测试Eino RAG功能V2
 	// fmt.Println("🔍 测试Eino RAG功能V2...")
 	// testEinoRAGV2()

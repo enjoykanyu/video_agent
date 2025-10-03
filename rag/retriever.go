@@ -30,7 +30,7 @@ func RetrieverRAG(query string) []*schema.Document {
 			"content",
 			"metadata",
 		},
-		TopK:      1,
+		TopK:      9,
 		Embedding: embedder,
 	})
 	if err != nil {
