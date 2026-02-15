@@ -1,8 +1,6 @@
 module video_agent
 
-go 1.24.0
-
-toolchain go1.24.7
+go 1.25.0
 
 require (
 	github.com/cloudwego/eino v0.5.4
