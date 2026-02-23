@@ -34,19 +34,22 @@ type GatewayVideoWrapper struct {
 // VideoData 视频数据结构（根据你的Gateway实际结构调整）
 // 字段名使用JSON标签匹配Gateway返回的字段名
 type VideoData struct {
-	VideoID     int64    `json:"video_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	AuthorID    int64    `json:"author_id"`
-	AuthorName  string   `json:"username"` // Gateway返回的是username
-	Duration    int      `json:"duration"`
-	ViewCount   int64    `json:"view_count"`
-	LikeCount   int64    `json:"like_count"`
-	Tags        []string `json:"tags"`
-	CoverURL    string   `json:"cover_url"`
-	VideoURL    string   `json:"video_url"`
-	CreatedAt   int64    `json:"create_time"` // Gateway返回的是create_time
-	Status      string   `json:"status"`
+	VideoID       int64    `json:"video_id"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	AuthorID      int64    `json:"author_id"`
+	AuthorName    string   `json:"username"` // Gateway返回的是username
+	Duration      int      `json:"duration"`
+	ViewCount     int64    `json:"view_count"`
+	LikeCount     int64    `json:"like_count"`
+	CommentCount  int64    `json:"comment_count"`  // 评论数
+	FavoriteCount int64    `json:"favorite_count"` // 收藏数
+	ShareCount    int64    `json:"share_count"`    // 分享数
+	Tags          []string `json:"tags"`
+	CoverURL      string   `json:"cover_url"`
+	VideoURL      string   `json:"video_url"`
+	CreatedAt     int64    `json:"create_time"` // Gateway返回的是create_time
+	Status        string   `json:"status"`
 }
 
 // NewGatewayVideoTool 创建Gateway视频工具
@@ -194,6 +197,7 @@ func (t *GatewayVideoTool) callGatewayAPI(ctx context.Context, videoID string) (
 	if err := json.Unmarshal(body, &gatewayResp); err == nil {
 		log.Printf("🔧 [GatewayVideoTool] 解析为包装格式 | Code: %d, Message: %s",
 			gatewayResp.Code, gatewayResp.Message)
+		log.Println("gatewayResp %v", gatewayResp.Data.Video)
 		if gatewayResp.Code == 0 || gatewayResp.Code == 200 {
 			if gatewayResp.Data != nil && gatewayResp.Data.Video != nil {
 				log.Printf("✅ [GatewayVideoTool] 成功解析视频数据 | VideoID: %d, Title: %s",
@@ -229,19 +233,22 @@ func getMapKeys(m map[string]interface{}) []string {
 // toMap 将VideoData转换为map（与之前保持一致）
 func (t *GatewayVideoTool) toMap(data *VideoData) map[string]interface{} {
 	return map[string]interface{}{
-		"video_id":    data.VideoID,
-		"title":       data.Title,
-		"description": data.Description,
-		"author_id":   data.AuthorID,
-		"author":      data.AuthorName,
-		"duration":    data.Duration,
-		"view_count":  data.ViewCount,
-		"like_count":  data.LikeCount,
-		"tags":        data.Tags,
-		"cover_url":   data.CoverURL,
-		"video_url":   data.VideoURL,
-		"created_at":  data.CreatedAt,
-		"status":      data.Status,
+		"video_id":       data.VideoID,
+		"title":          data.Title,
+		"description":    data.Description,
+		"author_id":      data.AuthorID,
+		"author":         data.AuthorName,
+		"duration":       data.Duration,
+		"view_count":     data.ViewCount,
+		"like_count":     data.LikeCount,
+		"comment_count":  data.CommentCount,
+		"favorite_count": data.FavoriteCount,
+		"share_count":    data.ShareCount,
+		"tags":           data.Tags,
+		"cover_url":      data.CoverURL,
+		"video_url":      data.VideoURL,
+		"created_at":     data.CreatedAt,
+		"status":         data.Status,
 	}
 }
 

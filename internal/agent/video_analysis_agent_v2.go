@@ -67,7 +67,7 @@ func (a *VideoAnalysisAgentV2) Analyze(ctx context.Context, req *VideoAnalysisRe
 	// 步骤2: 构建LLM提示词
 	prompt := a.buildAnalysisPrompt(req, videoInfo)
 	log.Printf("📝 [视频分析Agent] 构建分析提示词 | 长度: %d", len(prompt))
-
+	log.Printf("📝 [视频分析Agent] 分析提示词 | %s", prompt)
 	// 步骤3: 调用LLM进行深度分析
 	analysisResult, err := a.callLLMForAnalysis(ctx, prompt, videoInfo)
 	if err != nil {
@@ -107,20 +107,22 @@ func (a *VideoAnalysisAgentV2) getVideoInfoByMCP(ctx context.Context, videoID st
 		return nil, fmt.Errorf("MCP工具返回格式错误")
 	}
 
-	log.Printf("✅ [视频分析Agent] MCP工具调用成功 | 返回字段: %d", len(videoInfo))
+	log.Printf("✅ [视频分析Agent] MCP工具调用成功 | 返回字段: %v", videoInfo)
 	return videoInfo, nil
 }
 
 // buildAnalysisPrompt 构建分析提示词
 func (a *VideoAnalysisAgentV2) buildAnalysisPrompt(req *VideoAnalysisRequest, videoInfo map[string]interface{}) string {
-	// 提取视频信息
+	// 提取视频信息 - 支持float64和int64两种类型
 	title, _ := videoInfo["title"].(string)
 	description, _ := videoInfo["description"].(string)
-	duration, _ := videoInfo["duration"].(float64)
-	viewCount, _ := videoInfo["view_count"].(float64)
-	likeCount, _ := videoInfo["like_count"].(float64)
 	author, _ := videoInfo["author"].(string)
 	tags, _ := videoInfo["tags"].([]interface{})
+
+	// 数字字段可能是int64或float64，需要统一处理
+	duration := getFloat64FromMap(videoInfo, "duration")
+	viewCount := getFloat64FromMap(videoInfo, "view_count")
+	likeCount := getFloat64FromMap(videoInfo, "like_count")
 
 	// 构建标签字符串
 	tagStr := ""
@@ -159,7 +161,7 @@ func (a *VideoAnalysisAgentV2) buildAnalysisPrompt(req *VideoAnalysisRequest, vi
 4. **关键要点** (3-5点): 列出视频的关键信息点
 5. **标签建议** (5-8个): 基于内容推荐合适的标签
 6. **优化建议** (2-3条): 针对视频内容的改进建议
-
+7. **用户互动分析** (1-2条): 考虑用户互动（评论、点赞、分享）对视频成功的影响
 请以JSON格式返回，格式如下:
 {
   "summary": "视频摘要...",
@@ -167,7 +169,8 @@ func (a *VideoAnalysisAgentV2) buildAnalysisPrompt(req *VideoAnalysisRequest, vi
   "sentiment": "positive",
   "key_points": ["要点1", "要点2", "要点3"],
   "suggested_tags": ["标签1", "标签2", "标签3"],
-  "suggestions": ["建议1", "建议2"]
+  "suggestions": ["建议1", "建议2"],
+  "user_interaction_analysis": ["互动1", "互动2"]
 }`,
 		req.VideoID,
 		title,
@@ -350,4 +353,21 @@ func (t *GetVideoByIDTool) Execute(ctx context.Context, params map[string]interf
 		"tags":        []string{"精彩", "热门", "推荐"},
 		"created_at":  time.Now().Format(time.RFC3339),
 	}, nil
+}
+
+// getFloat64FromMap 从map中获取float64值，支持int64和float64类型
+func getFloat64FromMap(m map[string]interface{}, key string) float64 {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case float64:
+			return v
+		case int64:
+			return float64(v)
+		case int:
+			return float64(v)
+		case float32:
+			return float64(v)
+		}
+	}
+	return 0
 }
