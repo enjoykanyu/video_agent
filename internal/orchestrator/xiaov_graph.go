@@ -46,16 +46,30 @@ type XiaovGraph struct {
 }
 
 // NewXiaovGraph 创建小V助手图编排器
+// gatewayURL: Gateway服务地址，如 "http://localhost:8080"
 func NewXiaovGraph(
 	llm model.ChatModel,
 	intentAgent *agent.IntentRecognitionAgent,
 	memoryManager *memory.MemoryManager,
+	gatewayURL string,
 ) (*XiaovGraph, error) {
 	// 创建MCP工具注册表
 	toolRegistry := mcp.NewRegistry()
 	toolRegistry.RegisterDefaultTools()
-	// 注册视频分析专用工具
-	agent.RegisterMCPTools(toolRegistry)
+
+	// 注册Gateway网关层视频工具（真实调用Gateway的getVideoDetail）
+	if gatewayURL != "" {
+		gatewayTool := mcp.NewGatewayVideoTool(gatewayURL)
+		if err := toolRegistry.Register(gatewayTool); err != nil {
+			log.Printf("⚠️ [XiaovGraph] 注册Gateway工具失败: %v", err)
+		} else {
+			log.Printf("✅ [XiaovGraph] 注册Gateway视频工具成功 | URL: %s", gatewayURL)
+		}
+	} else {
+		// 如果没有Gateway地址，注册模拟工具
+		log.Printf("⚠️ [XiaovGraph] 未配置Gateway地址，使用模拟工具")
+		agent.RegisterMCPTools(toolRegistry)
+	}
 
 	// 创建视频分析Agent
 	videoAnalysisAgent := agent.NewVideoAnalysisAgentV2(llm, toolRegistry)
