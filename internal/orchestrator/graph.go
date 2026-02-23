@@ -383,6 +383,6 @@ func (o *GraphOrchestrator) formatResponse(result interface{}) AssistantResponse
 }
 
 // ClearSession 清除会话
-func (o *GraphOrchestrator) ClearSession(sessionID string) {
-	o.memoryManager.ClearSession(sessionID)
+func (o *GraphOrchestrator) ClearSession(ctx context.Context, sessionID string) error {
+	return o.memoryManager.ClearSession(ctx, sessionID)
 }
