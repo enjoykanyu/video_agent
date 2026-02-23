@@ -378,11 +378,9 @@ func (xg *XiaovGraph) handleVideoAnalysisWithAgent(ctx context.Context, input Xi
 
 // extractVideoID 从消息中提取视频ID
 func (xg *XiaovGraph) extractVideoID(message string) string {
-	// 匹配常见的视频ID格式 (BV号、av号等)
+	// 匹配
 	patterns := []string{
-		`BV[a-zA-Z0-9]{10}`,                    // B站BV号
-		`av\d+`,                                // B站av号
-		`video[_\s]?(?:id)?[_\s]?:?\s*([\w]+)`, // "video id: xxx" 或 "videoxxx"
+		`[a-zA-Z0-9]{10}`, // "video id: xxx" 或 "videoxxx"
 	}
 
 	for _, pattern := range patterns {
