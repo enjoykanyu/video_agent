@@ -177,7 +177,7 @@ func (xg *XiaovGraph) buildGraph() error {
 		log.Printf("📝 [图编排] 处理消息: %s", input.Message)
 
 		// 调用视频分析Agent V2 (包含MCP工具调用 + LLM分析)
-		reply := xg.handleVideoAnalysisWithAgent(ctx, input)
+		reply := xg.handleVideoAnalysis(ctx, input)
 
 		log.Printf("✅ [图编排] 创作分析处理完成 | 回复长度: %d", len(reply))
 		log.Printf("➡️ [图编排] 离开节点: creation -> END")
@@ -190,7 +190,7 @@ func (xg *XiaovGraph) buildGraph() error {
 		log.Printf("📝 [图编排] 处理消息: %s", input.Message)
 
 		// 调用视频分析处理
-		reply := xg.handleVideoAnalysis(ctx, input)
+		reply := xg.handleVideoAnalysisWithAgent(ctx, input)
 
 		log.Printf("✅ [图编排] 视频分析处理完成 | 回复长度: %d", len(reply))
 		log.Printf("➡️ [图编排] 离开节点: video -> END")
