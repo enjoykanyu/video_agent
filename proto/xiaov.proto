@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package xiaovpb;
+
+option go_package = "github.com/vision_world/video_agent/proto_gen";
+
+// 小V助手服务
+service XiaovService {
+    // 发送消息并获取回复（普通模式）
+    rpc Chat(ChatRequest) returns (ChatResponse);
+
+    // 发送消息并获取流式回复（SSE模式）
+    rpc ChatStream(ChatRequest) returns (stream ChatStreamResponse);
+
+    // 获取会话历史记录
+    rpc GetSessionHistory(GetSessionHistoryRequest) returns (GetSessionHistoryResponse);
+
+    // 清空会话历史
+    rpc ClearSession(ClearSessionRequest) returns (ClearSessionResponse);
+
+    // 健康检查
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ========== 基础消息 ==========
+message BaseResponse {
+    int32 code = 1;
+    string message = 2;
+}
+
+// ========== 聊天请求 ==========
+message ChatRequest {
+    string user_id = 1;      // 用户ID（必填）
+    string message = 2;      // 用户发送的消息（必填）
+    string session_id = 3;   // 会话ID（可选，用于保持上下文）
+}
+
+// ========== 聊天响应 ==========
+message ChatResponse {
+    int32 code = 1;                    // 状态码：0-成功，其他-失败
+    string message = 2;                // 状态描述
+    string reply = 3;                  // 助手回复的消息
+    string session_id = 4;             // 会话ID
+    string intent = 5;                 // 识别的意图类型
+    int64 timestamp = 6;               // 时间戳（毫秒）
+    map<string, string> metadata = 7;  // 元数据（如延迟、历史数量等）
+}
+
+// ========== 流式聊天响应 ==========
+message ChatStreamResponse {
+    oneof payload {
+        StreamContent content = 1;     // 内容片段
+        StreamDone done = 2;           // 完成标记
+        StreamError error = 3;         // 错误信息
+    }
+}
+
+message StreamContent {
+    string content = 1;        // 内容片段
+    string session_id = 2;     // 会话ID
+    string intent = 3;         // 意图类型
+}
+
+message StreamDone {
+    string session_id = 1;     // 会话ID
+    string intent = 2;         // 意图类型
+    int64 timestamp = 3;       // 完成时间戳
+}
+
+message StreamError {
+    int32 code = 1;            // 错误码
+    string message = 2;        // 错误信息
+    string session_id = 3;     // 会话ID
+}
+
+// ========== 获取会话历史 ==========
+message GetSessionHistoryRequest {
+    string session_id = 1;     // 会话ID（必填）
+    int32 limit = 2;           // 返回记录数量限制（默认20，最大100）
+}
+
+message GetSessionHistoryResponse {
+    int32 code = 1;
+    string message = 2;
+    repeated ChatMessage messages = 3;  // 历史消息列表
+    int32 total = 4;                    // 总记录数
+}
+
+// 聊天消息
+message ChatMessage {
+    string id = 1;             // 消息ID
+    string session_id = 2;     // 会话ID
+    string user_id = 3;        // 用户ID
+    string role = 4;           // 角色：user/assistant
+    string content = 5;        // 消息内容
+    int64 timestamp = 6;       // 时间戳
+    map<string, string> metadata = 7;  // 元数据
+}
+
+// ========== 清空会话 ==========
+message ClearSessionRequest {
+    string session_id = 1;     // 会话ID（必填）
+}
+
+message ClearSessionResponse {
+    int32 code = 1;
+    string message = 2;
+    bool cleared = 3;          // 是否成功清空
+}
+
+// ========== 健康检查 ==========
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+    int32 code = 1;
+    string status = 2;         // 状态：healthy/unhealthy
+    string version = 3;        // 版本号
+    int64 timestamp = 4;       // 时间戳
+    repeated string features = 5;  // 支持的功能列表
+}
