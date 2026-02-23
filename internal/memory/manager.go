@@ -21,6 +21,8 @@ const (
 	MemoryTypeCompressed MemoryType = "compressed"
 	MemoryTypeEpisodic   MemoryType = "episodic"
 	MemoryTypeSemantic   MemoryType = "semantic"
+	MemoryTypeUser       MemoryType = "user"
+	MemoryTypeAssistant  MemoryType = "assistant"
 )
 
 // Memory 记忆结构
@@ -397,9 +399,42 @@ func (m *MemoryManager) Compress(ctx context.Context, sessionID string) error {
 }
 
 // ClearSession 清除会话记忆
-func (m *MemoryManager) ClearSession(sessionID string) {
+func (m *MemoryManager) ClearSession(ctx context.Context, sessionID string) error {
 	m.shortTerm.Clear(sessionID)
 	m.working.Clear(sessionID)
+	return nil
+}
+
+// ClearSession 清除会话记忆（兼容旧接口）
+func (m *MemoryManager) ClearSessionLegacy(sessionID string) {
+	m.shortTerm.Clear(sessionID)
+	m.working.Clear(sessionID)
+}
+
+// GetSessionHistory 获取会话历史记录
+func (m *MemoryManager) GetSessionHistory(ctx context.Context, sessionID string, limit int) ([]Memory, error) {
+	// 从短期记忆获取
+	memories := m.shortTerm.Get(ctx, sessionID)
+
+	// 过滤用户和助手消息
+	var history []Memory
+	for _, mem := range memories {
+		if mem.Type == MemoryTypeUser || mem.Type == MemoryTypeAssistant {
+			history = append(history, mem)
+		}
+	}
+
+	// 按时间排序
+	sort.Slice(history, func(i, j int) bool {
+		return history[i].CreatedAt.Before(history[j].CreatedAt)
+	})
+
+	// 限制数量
+	if len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+
+	return history, nil
 }
 
 // MemoryCompressor 记忆压缩器
