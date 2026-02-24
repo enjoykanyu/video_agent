@@ -18,6 +18,7 @@ import (
 type VideoAnalysisAgentV2 struct {
 	llm          model.ChatModel
 	toolRegistry *mcp.Registry
+	mcpManager   *mcp.Manager // 新增：远程MCP管理器
 }
 
 // VideoAnalysisRequest 视频分析请求
@@ -43,11 +44,19 @@ type VideoAnalysisResponse struct {
 	ProcessingTime int64                  `json:"processing_time_ms"`
 }
 
-// NewVideoAnalysisAgentV2 创建视频分析Agent V2
+// NewVideoAnalysisAgentV2 创建视频分析Agent V2（本地模式）
 func NewVideoAnalysisAgentV2(llm model.ChatModel, toolRegistry *mcp.Registry) *VideoAnalysisAgentV2 {
 	return &VideoAnalysisAgentV2{
 		llm:          llm,
 		toolRegistry: toolRegistry,
+	}
+}
+
+// NewVideoAnalysisAgentV2WithMCP 创建视频分析Agent V2（远程MCP模式）
+func NewVideoAnalysisAgentV2WithMCP(llm model.ChatModel, mcpManager *mcp.Manager) *VideoAnalysisAgentV2 {
+	return &VideoAnalysisAgentV2{
+		llm:        llm,
+		mcpManager: mcpManager,
 	}
 }
 
@@ -86,25 +95,48 @@ func (a *VideoAnalysisAgentV2) Analyze(ctx context.Context, req *VideoAnalysisRe
 }
 
 // getVideoInfoByMCP 通过MCP工具获取视频信息
+// 支持本地Registry和远程MCP两种模式
 func (a *VideoAnalysisAgentV2) getVideoInfoByMCP(ctx context.Context, videoID string) (map[string]interface{}, error) {
-	log.Printf("🔧 [视频分析Agent] 调用MCP工具: GetVideoInfo | VideoID: %s", videoID)
+	log.Printf("🔧 [视频分析Agent] 调用MCP工具: get_video_by_id | VideoID: %s", videoID)
 
 	// 执行MCP工具调用
 	params := map[string]interface{}{
 		"video_id": videoID,
 	}
 
-	result, err := a.toolRegistry.Execute(ctx, "GetVideoInfo", params)
+	var result interface{}
+	var err error
+
+	// 优先使用远程MCP Manager
+	if a.mcpManager != nil {
+		log.Printf("🌐 [视频分析Agent] 使用远程MCP模式")
+		result, err = a.mcpManager.ExecuteTool(ctx, "get_video_by_id", params)
+	} else if a.toolRegistry != nil {
+		// 使用本地Registry
+		log.Printf("🏠 [视频分析Agent] 使用本地Registry模式")
+		result, err = a.toolRegistry.Execute(ctx, "GetVideoInfo", params)
+	} else {
+		return nil, fmt.Errorf("未配置MCP工具")
+	}
+
 	if err != nil {
 		// 如果工具不存在，使用模拟数据
 		log.Printf("⚠️ [视频分析Agent] MCP工具未找到或执行失败，使用模拟数据: %v", err)
 		return a.getMockVideoInfo(videoID), nil
 	}
 
-	// 解析结果
-	videoInfo, ok := result.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("MCP工具返回格式错误")
+	// 解析结果（远程MCP返回的是JSON字符串，需要解析）
+	var videoInfo map[string]interface{}
+	switch v := result.(type) {
+	case map[string]interface{}:
+		videoInfo = v
+	case string:
+		// 远程MCP返回的是JSON字符串
+		if err := json.Unmarshal([]byte(v), &videoInfo); err != nil {
+			return nil, fmt.Errorf("解析MCP返回结果失败: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("MCP工具返回格式错误: %T", result)
 	}
 
 	log.Printf("✅ [视频分析Agent] MCP工具调用成功 | 返回字段: %v", videoInfo)
