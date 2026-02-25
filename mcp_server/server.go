@@ -36,6 +36,9 @@ func NewVideoServer(gatewayURL string) *VideoServer {
 	// 注册工具
 	vs.registerTools(mcpServer)
 
+	// 打印已注册的工具列表
+	vs.printRegisteredTools(mcpServer)
+
 	// 创建SSE Server，使用 /mcp 前缀
 	vs.sseServer = server.NewSSEServer(mcpServer,
 		server.WithBasePath("/mcp"),
@@ -47,7 +50,10 @@ func NewVideoServer(gatewayURL string) *VideoServer {
 
 // registerTools 注册MCP工具
 func (vs *VideoServer) registerTools(s *server.MCPServer) {
+	log.Printf("🔧 [MCP Server] 开始注册工具...")
+
 	// 注册获取视频工具
+	log.Printf("🔧 [MCP Server] 注册工具: get_video_by_id")
 	videoTool := mcp.NewTool("get_video_by_id",
 		mcp.WithDescription("通过视频ID获取视频的详细信息，包括标题、描述、播放量、点赞数等"),
 		mcp.WithString("video_id",
@@ -55,10 +61,11 @@ func (vs *VideoServer) registerTools(s *server.MCPServer) {
 			mcp.Description("视频的唯一标识ID"),
 		),
 	)
-
 	s.AddTool(videoTool, vs.handleGetVideo)
+	log.Printf("✅ [MCP Server] 工具已注册: get_video_by_id")
 
 	// 注册获取用户信息工具
+	log.Printf("🔧 [MCP Server] 注册工具: get_user_info")
 	userTool := mcp.NewTool("get_user_info",
 		mcp.WithDescription("获取用户的详细信息"),
 		mcp.WithString("user_id",
@@ -66,10 +73,19 @@ func (vs *VideoServer) registerTools(s *server.MCPServer) {
 			mcp.Description("用户的唯一标识ID"),
 		),
 	)
-
 	s.AddTool(userTool, vs.handleGetUser)
+	log.Printf("✅ [MCP Server] 工具已注册: get_user_info")
 
-	log.Printf("✅ [MCP Server] 注册工具完成")
+	log.Printf("✅ [MCP Server] 注册工具完成，共注册 2 个工具")
+}
+
+// printRegisteredTools 打印已注册的工具列表
+func (vs *VideoServer) printRegisteredTools(s *server.MCPServer) {
+	tools := s.ListTools()
+	log.Printf("📋 [MCP Server] 已注册工具列表 (%d 个):", len(tools))
+	for name, tool := range tools {
+		log.Printf("   - %s: %s", name, tool.Tool.Description)
+	}
 }
 
 // handleGetVideo 处理获取视频请求
