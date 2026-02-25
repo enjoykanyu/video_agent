@@ -277,8 +277,13 @@ func (xg *XiaovGraph) StreamAnalyzeVideo(ctx context.Context, input XiaovInput) 
 
 	log.Printf("🎬 [图编排-流式] 开始流式分析视频 | VideoID: %s", videoID)
 
+	// 创建带超时的上下文，防止流式分析无限等待
+	// 设置30分钟超时，确保长视频分析能完成
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
 	// 调用V3 Agent的流式分析方法
-	streamReader, err := xg.videoAnalysisAgentV3.StreamAnalyze(ctx, videoID, input.Message)
+	streamReader, err := xg.videoAnalysisAgentV3.StreamAnalyze(ctxWithTimeout, videoID, input.Message)
 	if err != nil {
 		log.Printf("❌ [图编排-流式] 流式分析失败: %v", err)
 		return nil, fmt.Errorf("视频流式分析失败: %w", err)
