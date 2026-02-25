@@ -5,7 +5,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -55,13 +57,38 @@ func NewVideoAnalysisAgentV3(llm model.ChatModel, mcpManager *mcp.Manager) (*Vid
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: tools, // ← 绑定所有MCP工具，LLM自动选择
 		},
+		MaxStep: 3, // 限制最大步数为3步：1.决策 2.工具调用 3.生成回复（默认12步）
+		// 配置流式工具调用检测器，解决流式模式下工具调用检测问题
+		StreamToolCallChecker: func(ctx context.Context, sr *schema.StreamReader[*schema.Message]) (bool, error) {
+			defer sr.Close()
+			for {
+				msg, err := sr.Recv()
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					return false, err
+				}
+				if len(msg.ToolCalls) > 0 {
+					log.Printf("🤖 [ReAct Agent] 检测到工具调用: %d 个", len(msg.ToolCalls))
+					return true, nil
+				}
+			}
+			return false, nil
+		},
 		MessageModifier: func(ctx context.Context, input []*schema.Message) []*schema.Message {
 			// 添加系统提示词，指导LLM如何分析视频
+			log.Printf("🤖 [ReAct Agent] MessageModifier 被调用，准备调用LLM")
+			for i, msg := range input {
+				log.Printf("🤖 [ReAct Agent] 输入消息[%d] role=%s, content=%s", i, msg.Role, truncateString(msg.Content, 100))
+			}
 			systemMsg := &schema.Message{
 				Role:    schema.System,
 				Content: getVideoAnalysisSystemPrompt(),
 			}
-			return append([]*schema.Message{systemMsg}, input...)
+			result := append([]*schema.Message{systemMsg}, input...)
+			log.Printf("🤖 [ReAct Agent] 已添加系统提示词，共 %d 条消息", len(result))
+			return result
 		},
 	})
 	if err != nil {
@@ -141,6 +168,8 @@ func (a *VideoAnalysisAgentV3) StreamAnalyze(ctx context.Context, videoID string
 		userInput = fmt.Sprintf("请对视频 %s 进行全面分析。", videoID)
 	}
 
+	// 注意：ReAct Agent 已在初始化时配置 MessageModifier 自动添加系统提示词
+	// 这里只需要提供用户输入
 	messages := []*schema.Message{
 		{
 			Role:    schema.User,
@@ -148,12 +177,18 @@ func (a *VideoAnalysisAgentV3) StreamAnalyze(ctx context.Context, videoID string
 		},
 	}
 
+	log.Printf("🤖 [VideoAnalysisAgentV3] 流式调用ReAct Agent")
+	log.Printf("🤖 [VideoAnalysisAgentV3] 用户输入: %s", userInput)
+	startTime := time.Now()
+
 	// 流式调用
 	streamReader, err := a.agent.Stream(ctx, messages)
 	if err != nil {
+		log.Printf("❌ [VideoAnalysisAgentV3] ReAct Agent Stream 调用失败: %v", err)
 		return nil, fmt.Errorf("流式分析失败: %w", err)
 	}
 
+	log.Printf("✅ [VideoAnalysisAgentV3] ReAct Agent Stream 调用成功，耗时: %v", time.Since(startTime))
 	return streamReader, nil
 }
 
