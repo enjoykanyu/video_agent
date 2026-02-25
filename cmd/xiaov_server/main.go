@@ -251,9 +251,12 @@ func (s *XiaovGRPCServer) ChatStream(req *pb.ChatRequest, stream pb.XiaovService
 
 // handleStreamVideoAnalysis 流式处理视频分析
 func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatStreamServer, input orchestrator.XiaovInput, sessionID string) error {
+	log.Printf("📡 [流式] 开始流式分析，SessionID: %s", sessionID)
+
 	// 使用流式分析方法
 	streamReader, err := s.xiaovGraph.StreamAnalyzeVideo(stream.Context(), input)
 	if err != nil {
+		log.Printf("❌ [流式] StreamAnalyzeVideo 调用失败: %v", err)
 		errorMsg := &pb.ChatStreamResponse{
 			Payload: &pb.ChatStreamResponse_Error{
 				Error: &pb.StreamError{
@@ -272,8 +275,15 @@ func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatS
 	for {
 		msg, err := streamReader.Recv()
 		if err != nil {
-			break // 流结束
+			if err.Error() == "EOF" {
+				log.Printf("📡 [流式] 收到 EOF，流结束")
+			} else {
+				log.Printf("❌ [流式] 接收数据错误: %v", err)
+			}
+			break
 		}
+
+		log.Printf("📡 [流式] 收到数据片段，长度: %d", len(msg.Content))
 		fullContent += msg.Content
 
 		// 发送内容片段
@@ -287,8 +297,10 @@ func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatS
 			},
 		}
 		if err := stream.Send(contentMsg); err != nil {
+			log.Printf("❌ [流式] 发送数据失败: %v", err)
 			return err
 		}
+		log.Printf("📡 [流式] 数据片段已发送，累计长度: %d", len(fullContent))
 	}
 
 	// 存储到记忆
@@ -311,6 +323,7 @@ func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatS
 			},
 		},
 	}
+	log.Printf("✅ [流式] 流式分析完成，总长度: %d", len(fullContent))
 	return stream.Send(doneMsg)
 }
 
