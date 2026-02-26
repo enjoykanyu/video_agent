@@ -164,9 +164,9 @@ func (s *XiaovGRPCServer) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.Ch
 		Message:   req.Message,
 	}
 
-	// 创建新的上下文，设置更长的超时时间（5分钟）
-	// ReAct Agent 可能需要多次 LLM 调用，需要足够时间
-	execCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// 创建新的上下文，设置合理的超时时间（3分钟）
+	// ReAct Agent 需要调用工具和生成回复，给足够时间但不要无限等待
+	execCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	// 执行图编排
@@ -238,29 +238,37 @@ func (s *XiaovGRPCServer) ChatStream(req *pb.ChatRequest, stream pb.XiaovService
 		Message:   req.Message,
 	}
 
-	// 根据意图选择处理方式
-	switch intent.Type {
-	case agent.IntentVideoAnalysis:
-		// 视频分析使用流式处理（避免超时）
-		return s.handleStreamVideoAnalysis(stream, input, sessionID)
-	default:
-		// 其他意图使用普通图编排
-		return s.handleStreamGeneralChat(stream, input, sessionID)
-	}
+	// 所有意图都使用同步处理（避免流式超时问题）
+	return s.handleStreamGeneralChat(stream, input, sessionID)
 }
 
-// handleStreamVideoAnalysis 流式处理视频分析
+// handleStreamVideoAnalysis 处理视频分析（使用同步调用避免流式超时问题）
 func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatStreamServer, input orchestrator.XiaovInput, sessionID string) error {
-	log.Printf("📡 [流式] 开始流式分析，SessionID: %s", sessionID)
+	log.Printf("📡 [视频分析] 开始同步分析，SessionID: %s", sessionID)
 
-	// 使用流式分析方法
-	streamReader, err := s.xiaovGraph.StreamAnalyzeVideo(stream.Context(), input)
+	// 发送开始处理的状态消息
+	startMsg := &pb.ChatStreamResponse{
+		Payload: &pb.ChatStreamResponse_Content{
+			Content: &pb.StreamContent{
+				Content:   "正在分析视频，请稍候...",
+				SessionId: sessionID,
+				Intent:    "video_analysis",
+			},
+		},
+	}
+	if err := stream.Send(startMsg); err != nil {
+		log.Printf("❌ [视频分析] 发送开始消息失败: %v", err)
+		return err
+	}
+
+	// 使用同步分析方法（避免流式处理的复杂问题）
+	output, err := s.xiaovGraph.Execute(stream.Context(), input)
 	if err != nil {
-		log.Printf("❌ [流式] StreamAnalyzeVideo 调用失败: %v", err)
+		log.Printf("❌ [视频分析] 分析失败: %v", err)
 		errorMsg := &pb.ChatStreamResponse{
 			Payload: &pb.ChatStreamResponse_Error{
 				Error: &pb.StreamError{
-					Code:      400,
+					Code:      500,
 					Message:   err.Error(),
 					SessionId: sessionID,
 				},
@@ -268,46 +276,29 @@ func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatS
 		}
 		return stream.Send(errorMsg)
 	}
-	defer streamReader.Close()
 
-	// 流式发送分析结果
-	var fullContent string
-	for {
-		msg, err := streamReader.Recv()
-		if err != nil {
-			if err.Error() == "EOF" {
-				log.Printf("📡 [流式] 收到 EOF，流结束")
-			} else {
-				log.Printf("❌ [流式] 接收数据错误: %v", err)
-			}
-			break
-		}
+	log.Printf("✅ [视频分析] 分析完成，回复长度: %d", len(output.Reply))
 
-		log.Printf("📡 [流式] 收到数据片段，长度: %d", len(msg.Content))
-		fullContent += msg.Content
-
-		// 发送内容片段
-		contentMsg := &pb.ChatStreamResponse{
-			Payload: &pb.ChatStreamResponse_Content{
-				Content: &pb.StreamContent{
-					Content:   msg.Content,
-					SessionId: sessionID,
-					Intent:    "video_analysis",
-				},
+	// 发送分析结果
+	contentMsg := &pb.ChatStreamResponse{
+		Payload: &pb.ChatStreamResponse_Content{
+			Content: &pb.StreamContent{
+				Content:   output.Reply,
+				SessionId: sessionID,
+				Intent:    "video_analysis",
 			},
-		}
-		if err := stream.Send(contentMsg); err != nil {
-			log.Printf("❌ [流式] 发送数据失败: %v", err)
-			return err
-		}
-		log.Printf("📡 [流式] 数据片段已发送，累计长度: %d", len(fullContent))
+		},
+	}
+	if err := stream.Send(contentMsg); err != nil {
+		log.Printf("❌ [视频分析] 发送结果失败: %v", err)
+		return err
 	}
 
 	// 存储到记忆
 	assistantMemory := memory.Memory{
 		ID:        uuid.New().String(),
 		SessionID: sessionID,
-		Content:   fullContent,
+		Content:   output.Reply,
 		Type:      memory.MemoryTypeAssistant,
 		CreatedAt: time.Now(),
 	}
@@ -323,7 +314,7 @@ func (s *XiaovGRPCServer) handleStreamVideoAnalysis(stream pb.XiaovService_ChatS
 			},
 		},
 	}
-	log.Printf("✅ [流式] 流式分析完成，总长度: %d", len(fullContent))
+	log.Printf("✅ [视频分析] 处理完成")
 	return stream.Send(doneMsg)
 }
 
