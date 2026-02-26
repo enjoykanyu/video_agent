@@ -95,8 +95,8 @@ func NewXiaovGRPCServer() (*XiaovGRPCServer, error) {
 	// ReAct Agent需要模型支持工具调用
 	chatModel, err := ollama.NewChatModel(ctx, &ollama.ChatModelConfig{
 		BaseURL: "http://localhost:11434",
-		Model:   "qwen3:4b",       // 使用1.7b模型，平衡速度和工具调用能力
-		Timeout: 30 * time.Minute, // 设置30分钟超时
+		Model:   "qwen3:0.6b",    // 使用0.6b模型，速度最快
+		Timeout: 6 * time.Minute, // 设置6分钟超时，给模型足够时间处理
 	})
 	if err != nil {
 		return nil, fmt.Errorf("初始化Ollama模型失败: %w", err)
