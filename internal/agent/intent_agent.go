@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -102,7 +103,11 @@ func (a *IntentRecognitionAgent) Recognize(ctx context.Context, query string) (*
 		},
 	}
 
-	response, err := a.llm.Generate(ctx, messages)
+	// 为意图识别设置独立的超时（10秒），避免阻塞整个流程
+	llmCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	response, err := a.llm.Generate(llmCtx, messages)
 	if err != nil {
 		// 回退到规则分类
 		return a.ruleBasedClassify(query), nil
