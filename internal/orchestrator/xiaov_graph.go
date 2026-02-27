@@ -627,16 +627,28 @@ func (xg *XiaovGraph) extractVideoDataFromToolResults(toolResults []ToolExecutio
 		if contentArr, ok := outerMap["content"].([]interface{}); ok && len(contentArr) > 0 {
 			if contentMap, ok := contentArr[0].(map[string]interface{}); ok {
 				if text, ok := contentMap["text"].(string); ok {
-					// text 字段包含 base64 编码的 JSON
+					// text 字段可能是以下几种格式：
+					// 1. base64 编码的 JSON
+					// 2. 带引号的 base64 字符串（需要先去掉引号）
+					// 3. 直接的 JSON 字符串
+
+					// 去掉可能的引号
+					text = strings.Trim(text, `"`)
+
+					// 先尝试 base64 解码
 					decodedBytes, err := base64.StdEncoding.DecodeString(text)
-					if err != nil {
-						log.Printf("⚠️ Base64 解码失败: %v", err)
-						continue
-					}
-					// 解析解码后的 JSON
-					if err := json.Unmarshal(decodedBytes, &dataMap); err != nil {
-						log.Printf("⚠️ 解析解码后的 JSON 失败: %v", err)
-						continue
+					if err == nil {
+						// base64 解码成功，解析解码后的 JSON
+						if err := json.Unmarshal(decodedBytes, &dataMap); err != nil {
+							log.Printf("⚠️ 解析解码后的 JSON 失败: %v", err)
+							continue
+						}
+					} else {
+						// base64 解码失败，尝试直接解析 text 为 JSON
+						if err := json.Unmarshal([]byte(text), &dataMap); err != nil {
+							log.Printf("⚠️ 解析 text 失败: %v, text前100字符: %s", err, text[:min(len(text), 100)])
+							continue
+						}
 					}
 				}
 			}
