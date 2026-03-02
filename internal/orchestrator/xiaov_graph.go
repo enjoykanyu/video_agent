@@ -101,7 +101,7 @@ func NewXiaovGraph(
 		return nil, fmt.Errorf("创建MCP管理器失败: %w", err)
 	}
 
-	log.Printf("✅ [XiaovGraph] 企业级图编排器初始化成功")
+	log.Printf("✅ [XiaovGraph] 图编排器初始化成功")
 
 	xg := &XiaovGraph{
 		llm:           llm,
@@ -116,10 +116,6 @@ func NewXiaovGraph(
 
 	return xg, nil
 }
-
-// =============================================================================
-// 图编排构建
-// =============================================================================
 
 // buildGraph 构建图编排
 func (xg *XiaovGraph) buildGraph() error {
@@ -148,7 +144,12 @@ func (xg *XiaovGraph) buildGraph() error {
 		return xg.analysisNode(ctx, state)
 	})
 
-	// 5. 输出总结节点
+	//5. 创作助手节点
+	authoringNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+		return xg.authoringNode(ctx, state)
+	})
+
+	// 6. 输出总结节点
 	summaryNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (XiaovOutput, error) {
 		return xg.summaryNode(ctx, state)
 	})
@@ -158,6 +159,7 @@ func (xg *XiaovGraph) buildGraph() error {
 	g.AddLambdaNode("tool_selection", toolSelectionNode)
 	g.AddLambdaNode("tool_execution", toolExecutionNode)
 	g.AddLambdaNode("analysis", analysisNode)
+	g.AddLambdaNode("authoring", authoringNode)
 	g.AddLambdaNode("summary", summaryNode)
 
 	// 添加边：顺序执行
@@ -165,7 +167,9 @@ func (xg *XiaovGraph) buildGraph() error {
 	g.AddEdge("intent", "tool_selection")
 	g.AddEdge("tool_selection", "tool_execution")
 	g.AddEdge("tool_execution", "analysis")
+	g.AddEdge("tool_execution", "authoring")
 	g.AddEdge("analysis", "summary")
+	g.AddEdge("authoring", "summary")
 	g.AddEdge("summary", compose.END)
 
 	// 编译图
@@ -178,13 +182,9 @@ func (xg *XiaovGraph) buildGraph() error {
 	return nil
 }
 
-// =============================================================================
-// 节点实现
-// =============================================================================
-
 // intentRecognitionNode 意图识别节点
 func (xg *XiaovGraph) intentRecognitionNode(ctx context.Context, input XiaovInput) (GraphState, error) {
-	log.Printf("🎯 [节点1:意图识别] SessionID: %s", input.SessionID)
+	log.Printf("🎯 [节点:意图识别] SessionID: %s", input.SessionID)
 	startTime := time.Now()
 
 	// 识别意图
@@ -235,7 +235,7 @@ func (xg *XiaovGraph) intentRecognitionNode(ctx context.Context, input XiaovInpu
 
 // toolSelectionNode 工具选择节点
 func (xg *XiaovGraph) toolSelectionNode(ctx context.Context, state GraphState) (GraphState, error) {
-	log.Printf("🔧 [节点2:工具选择] SessionID: %s, Intent: %s", state.SessionID, state.Intent)
+	log.Printf("🔧 [节点:工具选择] SessionID: %s, Intent: %s", state.SessionID, state.Intent)
 	startTime := time.Now()
 
 	// 通用对话不需要工具
@@ -276,7 +276,7 @@ func (xg *XiaovGraph) toolSelectionNode(ctx context.Context, state GraphState) (
 
 // toolExecutionNode MCP Tool 调用节点
 func (xg *XiaovGraph) toolExecutionNode(ctx context.Context, state GraphState) (GraphState, error) {
-	log.Printf("⚙️ [节点3:工具执行] SessionID: %s", state.SessionID)
+	log.Printf("⚙️ [节点:工具执行] SessionID: %s", state.SessionID)
 	startTime := time.Now()
 
 	// 通用对话或没有选中工具，跳过执行
@@ -330,7 +330,7 @@ func (xg *XiaovGraph) toolExecutionNode(ctx context.Context, state GraphState) (
 
 // analysisNode 分析 Agent 节点
 func (xg *XiaovGraph) analysisNode(ctx context.Context, state GraphState) (GraphState, error) {
-	log.Printf("📝 [节点4:分析Agent] SessionID: %s, Intent: %s", state.SessionID, state.Intent)
+	log.Printf("📝 [节点:分析Agent] SessionID: %s, Intent: %s", state.SessionID, state.Intent)
 	startTime := time.Now()
 
 	// 通用对话不需要分析
@@ -370,9 +370,15 @@ func (xg *XiaovGraph) analysisNode(ctx context.Context, state GraphState) (Graph
 	return state, nil
 }
 
+// authoringNode 创作助手节点
+func (xg *XiaovGraph) authoringNode(ctx context.Context, state GraphState) (GraphState, error) {
+	log.Printf("📝 [节点:创作助手] SessionID: %s, Intent: %s", state.SessionID, state.Intent)
+	return state, nil
+}
+
 // summaryNode 输出总结节点
 func (xg *XiaovGraph) summaryNode(ctx context.Context, state GraphState) (XiaovOutput, error) {
-	log.Printf("📤 [节点5:输出总结] SessionID: %s", state.SessionID)
+	log.Printf("📤 [节点:输出总结] SessionID: %s", state.SessionID)
 	startTime := time.Now()
 
 	var finalReply string
