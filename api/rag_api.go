@@ -1,13 +1,12 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-	"video_agent/agent"
 	"video_agent/rag"
+
+	"github.com/gin-gonic/gin"
 )
 
 // RAGServer RAG API服务器
@@ -91,7 +90,7 @@ func (s *RAGServer) searchDocuments(c *gin.Context) {
 		req.TopK = 3
 	}
 
-	ctx := context.Background()
+	// ctx := context.Background()
 	documents, err := s.ragManager.SearchSimilarDocuments(req.Query, req.TopK)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -135,7 +134,7 @@ func (s *RAGServer) addDocument(c *gin.Context) {
 		return
 	}
 
-	ctx := context.Background()
+	// ctx := context.Background()
 	if err := s.ragManager.AddDocument(req.Content, req.Metadata); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -215,7 +214,7 @@ func (s *RAGServer) chatWithRAG(c *gin.Context) {
 
 	// 这里应该调用RAG图代理来处理请求
 	// 为了简化，这里返回一个模拟的响应
-	ctx := context.Background()
+	// ctx := context.Background()
 	documents, err := s.ragManager.SearchSimilarDocuments(req.Query, req.TopK)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
