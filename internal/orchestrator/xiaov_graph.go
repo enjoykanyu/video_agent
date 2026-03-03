@@ -19,6 +19,7 @@ import (
 	"video_agent/internal/agent"
 	"video_agent/internal/mcp"
 	"video_agent/internal/memory"
+	"video_agent/rag"
 )
 
 // =============================================================================
@@ -55,6 +56,7 @@ type GraphState struct {
 	AnalysisResult   string                 `json:"analysis_result"`
 	FinalReply       string                 `json:"final_reply"`
 	Metadata         map[string]interface{} `json:"metadata"`
+	RAGContext       string                 `json:"rag_context,omitempty"` // RAG检索上下文
 }
 
 // ToolSelection 工具选择结果
@@ -83,6 +85,7 @@ type XiaovGraph struct {
 	intentAgent   *agent.IntentRecognitionAgent
 	memoryManager *memory.MemoryManager
 	mcpManager    *mcp.Manager
+	ragManager    *rag.RAGManager
 }
 
 // =============================================================================
@@ -95,6 +98,7 @@ func NewXiaovGraph(
 	intentAgent *agent.IntentRecognitionAgent,
 	memoryManager *memory.MemoryManager,
 	mcpConfig *mcp.ManagerConfig,
+	ragManager *rag.RAGManager,
 ) (*XiaovGraph, error) {
 	mcpManager, err := mcp.NewManager(mcpConfig)
 	if err != nil {
@@ -108,6 +112,7 @@ func NewXiaovGraph(
 		intentAgent:   intentAgent,
 		memoryManager: memoryManager,
 		mcpManager:    mcpManager,
+		ragManager:    ragManager,
 	}
 
 	if err := xg.buildGraph(); err != nil {
@@ -123,7 +128,10 @@ func (xg *XiaovGraph) buildGraph() error {
 
 	// 创建状态图，使用 GraphState 作为状态传递
 	g := compose.NewGraph[XiaovInput, XiaovOutput]()
-
+	//0,rag检索节点
+	ragNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+		return xg.ragRetrievalNode(ctx, state)
+	})
 	// 1. 意图识别节点
 	intentNode := compose.InvokableLambda(func(ctx context.Context, input XiaovInput) (GraphState, error) {
 		return xg.intentRecognitionNode(ctx, input)
@@ -155,6 +163,7 @@ func (xg *XiaovGraph) buildGraph() error {
 	})
 
 	// 添加节点到图
+	g.AddLambdaNode("rag", ragNode)
 	g.AddLambdaNode("intent", intentNode)
 	g.AddLambdaNode("tool_selection", toolSelectionNode)
 	g.AddLambdaNode("tool_execution", toolExecutionNode)
@@ -165,12 +174,14 @@ func (xg *XiaovGraph) buildGraph() error {
 	// 添加边：顺序执行
 	g.AddEdge(compose.START, "intent")
 	g.AddEdge("intent", "tool_selection")
+	g.AddEdge("intent", "rag")
 	g.AddEdge("tool_selection", "tool_execution")
 	g.AddEdge("tool_execution", "analysis")
 	g.AddEdge("tool_execution", "authoring")
 	g.AddEdge("analysis", "summary")
 	g.AddEdge("authoring", "summary")
 	g.AddEdge("summary", compose.END)
+	g.AddEdge("rag", "summary")
 
 	// 编译图
 	runnable, err := g.Compile(ctx)
@@ -180,6 +191,29 @@ func (xg *XiaovGraph) buildGraph() error {
 
 	xg.graph = runnable
 	return nil
+}
+
+// 实现 RAG 检索节点
+func (xg *XiaovGraph) ragRetrievalNode(ctx context.Context, state GraphState) (GraphState, error) {
+	if xg.ragManager == nil {
+		return state, nil
+	}
+
+	// 使用用户查询检索相关知识
+	docs, err := xg.ragManager.SearchSimilarDocuments(state.OriginalMessage, 3)
+	if err != nil {
+		log.Printf("⚠️ RAG 检索失败: %v", err)
+		return state, nil
+	}
+
+	// 将检索结果加入状态
+	var contextBuilder strings.Builder
+	for _, doc := range docs {
+		contextBuilder.WriteString(doc.Content + "\n")
+	}
+	state.RAGContext = contextBuilder.String()
+
+	return state, nil
 }
 
 // intentRecognitionNode 意图识别节点

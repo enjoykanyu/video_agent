@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	rag "video_agent/rag"
+
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -31,6 +33,7 @@ type XiaovGRPCServer struct {
 	intentAgent   *agent.IntentRecognitionAgent
 	memoryManager *memory.MemoryManager
 	sessionStore  map[string]*SessionContext
+	ragManager    *rag.RAGManager
 }
 
 // SessionContext 会话上下文
@@ -63,14 +66,6 @@ func main() {
 	go func() {
 		fmt.Printf("🚀 gRPC服务器启动成功！\n")
 		fmt.Printf("📍 监听地址: localhost%s\n", addr)
-		fmt.Printf("\n📚 gRPC服务方法:\n")
-		fmt.Printf("  /xiaovpb.XiaovService/Chat\n")
-		fmt.Printf("  /xiaovpb.XiaovService/ChatStream\n")
-		fmt.Printf("  /xiaovpb.XiaovService/GetSessionHistory\n")
-		fmt.Printf("  /xiaovpb.XiaovService/ClearSession\n")
-		fmt.Printf("  /xiaovpb.XiaovService/HealthCheck\n")
-		fmt.Printf("\n💡 按 Ctrl+C 退出程序\n")
-
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("❌ gRPC服务器运行失败: %v", err)
 		}
@@ -92,7 +87,7 @@ func NewXiaovGRPCServer() (*XiaovGRPCServer, error) {
 
 	// 初始化Ollama模型
 	// 可用模型: qwen3:0.6b(最快), deepseek-r1:1.5b(不支持工具), deepseek-r1:8b, llama2-chinese, llama3(支持工具)
-	// ReAct Agent需要模型支持工具调用
+	// ReAct Agent 本地无法支持
 	chatModel, err := ollama.NewChatModel(ctx, &ollama.ChatModelConfig{
 		BaseURL: "http://localhost:11434",
 		Model:   "qwen3:0.6b",    // 使用0.6b模型，速度最快
@@ -111,7 +106,15 @@ func NewXiaovGRPCServer() (*XiaovGRPCServer, error) {
 		memory.NewLongTermMemory(nil, nil, nil),
 		memory.NewWorkingMemory(100),
 	)
-
+	// 初始化 RAG
+	ragManager, err := rag.NewRAGManager(
+		"./data/vector_store/documents.json",
+		"./data/rag_store/documents.json",
+	)
+	if err != nil {
+		log.Printf("⚠️ RAG 初始化失败: %v", err)
+		ragManager = nil
+	}
 	// 创建图编排器（MCP模式）
 	// 配置MCP Server连接
 	// 注意：MCP Server需要单独启动，建议监听 :8081（避免与Gateway :8080冲突）
@@ -125,7 +128,7 @@ func NewXiaovGRPCServer() (*XiaovGRPCServer, error) {
 		},
 	}
 
-	xiaovGraph, err := orchestrator.NewXiaovGraph(chatModel, intentAgent, memoryManager, mcpConfig)
+	xiaovGraph, err := orchestrator.NewXiaovGraph(chatModel, intentAgent, memoryManager, mcpConfig, ragManager)
 	if err != nil {
 		return nil, fmt.Errorf("初始化图编排器失败: %w", err)
 	}
@@ -135,6 +138,7 @@ func NewXiaovGRPCServer() (*XiaovGRPCServer, error) {
 		intentAgent:   intentAgent,
 		memoryManager: memoryManager,
 		sessionStore:  make(map[string]*SessionContext),
+		ragManager:    ragManager,
 	}, nil
 }
 
