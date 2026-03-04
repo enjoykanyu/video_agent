@@ -220,35 +220,46 @@ func (xg *XiaovGraph) buildGraph() error {
 	}))
 	g.AddLambdaNode("summary", summaryNode)
 
-	// 添加边：顺序执行
+	// 添加边：意图识别后通过 Branch 路由到不同 Agent
 	g.AddEdge(compose.START, "intent")
-	g.AddEdge("intent", "tool_selection")
-	g.AddEdge("intent", "rag")
-	g.AddEdge("tool_selection", "tool_execution")
-	// 工具执行后进入后置处理器（不再直接连接到 analysis 和 authoring）
-	g.AddEdge("tool_execution", "post_processor")
-	// RAG 检索结果也传递给后置处理器
-	g.AddEdge("rag", "post_processor")
 
-	g.AddBranch("post_processor", compose.NewGraphBranch(
+	// Branch 路由：根据意图识别的 actionKey 路由到对应 Agent
+	g.AddBranch("intent", compose.NewGraphBranch(
 		func(ctx context.Context, state GraphState) (string, error) {
-			log.Printf("🔀 [Branch 路由] 开始路由决策")
+			log.Printf("🔀 [Branch 路由] 开始路由决策，Intent: %s", state.Intent)
 
-			// 复杂路由逻辑：考虑意图、置信度、工具结果、RAG 上下文
-			targetNode := xg.routeToAgent(state)
-
-			log.Printf("🔀 [Branch 路由] 路由到：%s", targetNode)
-			return targetNode, nil
+			// 根据意图类型路由到对应 Agent
+			switch state.Intent {
+			case agent.IntentVideoAnalysis:
+				log.Printf("🔀 [Branch 路由] 路由到视频分析 Agent")
+				return "analysis", nil
+			case agent.IntentContentCreation:
+				log.Printf("🔀 [Branch 路由] 路由到内容创作 Agent")
+				return "authoring", nil
+			case agent.IntentKnowledgeQA:
+				log.Printf("🔀 [Branch 路由] 路由到通用知识库 Agent")
+				return "general_chat", nil
+			default:
+				// 置信度低于阈值或未知意图，使用通用对话
+				if state.IntentConfidence < 0.6 {
+					log.Printf("🔀 [Branch 路由] 置信度低于阈值，路由到通用对话")
+				}
+				return "general_chat", nil
+			}
 		},
+		// 可能的目标节点（必须与 AddLambdaNode 的名称一致）
 		map[string]bool{
-			"analysis":     true,
-			"authoring":    true,
-			"general_chat": true,
+			"analysis":     true, // 视频分析 Agent
+			"authoring":    true, // 内容创作 Agent
+			"general_chat": true, // 通用知识库 Agent
 		},
 	))
 
 	// 连接各 Agent 节点到 summary（Branch 选中的节点才会执行）
+	g.AddEdge("analysis", "summary")
+	g.AddEdge("authoring", "summary")
 	g.AddEdge("general_chat", "summary")
+	g.AddEdge("summary", compose.END)
 
 	// 编译图
 	runnable, err := g.Compile(ctx)
@@ -260,72 +271,60 @@ func (xg *XiaovGraph) buildGraph() error {
 	return nil
 }
 
-// routeToAgent 路由决策逻辑
-func (xg *XiaovGraph) routeToAgent(state GraphState) string {
-	// 计算各 Agent 的得分
-	scores := xg.calculateAgentScores(state)
+// executeVideoAnalysisTools 执行视频分析相关的工具
+func (xg *XiaovGraph) executeVideoAnalysisTools(ctx context.Context, state GraphState) GraphState {
+	log.Printf("🔧 [视频分析工具] 开始执行视频相关工具")
 
-	log.Printf("🔀 [路由决策] 得分 - 视频分析：%.2f, 内容创作：%.2f, 通用对话：%.2f",
-		scores["video_analysis"], scores["content_creation"], scores["general_chat"])
-
-	// 选择得分最高的 Agent
-	maxScore := 0.0
-	targetNode := "general_chat"
-
-	for agentName, score := range scores {
-		if score > maxScore {
-			maxScore = score
-			targetNode = agentName
-		}
+	// 模拟工具执行
+	toolResults := []ToolExecutionResult{
+		{
+			ToolName:   "video_downloader",
+			Result:     "视频下载成功",
+			StartTime:  time.Now(),
+			EndTime:    time.Now(),
+			DurationMs: 100,
+		},
+		{
+			ToolName:   "frame_extractor",
+			Result:     "提取关键帧 10 张",
+			StartTime:  time.Now(),
+			EndTime:    time.Now(),
+			DurationMs: 200,
+		},
 	}
 
-	// 置信度阈值：如果最高得分低于阈值，使用通用对话
-	if maxScore < 0.6 {
-		log.Printf("🔀 [路由决策] 最高得分 %.2f 低于阈值，使用通用对话", maxScore)
-		return "general_chat"
-	}
+	state.ToolResults = append(state.ToolResults, toolResults...)
+	state.Metadata["video_tools_executed"] = true
 
-	return targetNode
+	return state
 }
 
-func (xg *XiaovGraph) calculateAgentScores(state GraphState) map[string]float64 {
-	scores := map[string]float64{
-		"video_analysis":   0.0,
-		"content_creation": 0.0,
-		"general_chat":     state.IntentConfidence,
+// executeContentCreationTools 执行内容创作相关的工具
+func (xg *XiaovGraph) executeContentCreationTools(ctx context.Context, state GraphState) GraphState {
+	log.Printf("🔧 [内容创作工具] 开始执行创作相关工具")
+
+	// 模拟工具执行
+	toolResults := []ToolExecutionResult{
+		{
+			ToolName:   "trend_analyzer",
+			Result:     "分析当前流行趋势",
+			StartTime:  time.Now(),
+			EndTime:    time.Now(),
+			DurationMs: 150,
+		},
+		{
+			ToolName:   "keyword_extractor",
+			Result:     "提取关键词 5 个",
+			StartTime:  time.Now(),
+			EndTime:    time.Now(),
+			DurationMs: 80,
+		},
 	}
 
-	// 基于意图类型
-	switch state.Intent {
-	case agent.IntentVideoAnalysis:
-		scores["video_analysis"] = state.IntentConfidence
-	case agent.IntentContentCreation:
-		scores["content_creation"] = state.IntentConfidence
-	default:
-		scores["general_chat"] = state.IntentConfidence
-	}
+	state.ToolResults = append(state.ToolResults, toolResults...)
+	state.Metadata["creation_tools_executed"] = true
 
-	// 基于工具结果调整得分
-	for _, tr := range state.ToolResults {
-		if strings.Contains(tr.ToolName, "video") || strings.Contains(tr.ToolName, "frame") {
-			scores["video_analysis"] += 0.15
-		}
-		if strings.Contains(tr.ToolName, "content") || strings.Contains(tr.ToolName, "write") {
-			scores["content_creation"] += 0.15
-		}
-	}
-
-	// 基于 RAG 上下文调整得分
-	if state.RAGContext != "" {
-		if strings.Contains(state.RAGContext, "视频") || strings.Contains(state.RAGContext, "分析") {
-			scores["video_analysis"] += 0.2
-		}
-		if strings.Contains(state.RAGContext, "创作") || strings.Contains(state.RAGContext, "文案") {
-			scores["content_creation"] += 0.2
-		}
-	}
-
-	return scores
+	return state
 }
 
 // buildDynamicSystemPrompt 构建动态系统提示词
