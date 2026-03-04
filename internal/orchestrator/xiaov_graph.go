@@ -127,7 +127,13 @@ func (xg *XiaovGraph) buildGraph() error {
 	ctx := context.Background()
 
 	// 创建状态图，使用 GraphState 作为状态传递
-	g := compose.NewGraph[XiaovInput, XiaovOutput]()
+	g := compose.NewGraph[XiaovInput, XiaovOutput](
+		compose.WithGenLocalState(func(ctx context.Context) *GraphState {
+			return &GraphState{
+				Metadata: make(map[string]interface{}),
+			}
+		}),
+	)
 	//0,rag检索节点
 	ragNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
 		return xg.ragRetrievalNode(ctx, state)
@@ -148,12 +154,14 @@ func (xg *XiaovGraph) buildGraph() error {
 	})
 
 	// 4. 分析 Agent 节点
-	analysisNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+	analysisLambda := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+		log.Printf("📹 [视频分析] 使用动态提示词执行")
 		return xg.analysisNode(ctx, state)
 	})
 
 	//5. 创作助手节点
-	authoringNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+	authoringLambda := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+		log.Printf("✍️ [内容创作] 使用动态提示词执行")
 		return xg.authoringNode(ctx, state)
 	})
 
@@ -161,14 +169,55 @@ func (xg *XiaovGraph) buildGraph() error {
 	summaryNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (XiaovOutput, error) {
 		return xg.summaryNode(ctx, state)
 	})
+	postProcessorNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
+		log.Printf("⚙️ [后置处理器] 开始构建动态提示词")
 
+		// 构建系统提示词
+		systemPrompt := xg.buildDynamicSystemPrompt(state)
+
+		// 构建用户提示词
+		userPrompt := xg.buildDynamicUserPrompt(state)
+
+		state.Metadata["system_prompt"] = systemPrompt
+		state.Metadata["user_prompt"] = userPrompt
+		state.Metadata["post_processor_stage"] = "prompt_ready"
+
+		log.Printf("⚙️ [后置处理器] 系统提示词长度：%d, 用户提示词长度：%d",
+			len(systemPrompt), len(userPrompt))
+
+		return state, nil
+	})
 	// 添加节点到图
 	g.AddLambdaNode("rag", ragNode)
 	g.AddLambdaNode("intent", intentNode)
 	g.AddLambdaNode("tool_selection", toolSelectionNode)
 	g.AddLambdaNode("tool_execution", toolExecutionNode)
-	g.AddLambdaNode("analysis", analysisNode)
-	g.AddLambdaNode("authoring", authoringNode)
+	// 添加后置处理器节点，负责构建动态提示词
+	g.AddLambdaNode("post_processor", postProcessorNode)
+	// 添加分析节点，使用 WithStatePreHandler 处理动态提示词
+	g.AddLambdaNode("analysis", analysisLambda, compose.WithStatePreHandler(func(ctx context.Context, state GraphState, gs *GraphState) (GraphState, error) {
+		log.Printf("📹 [视频分析 PreHandler] 加载动态提示词")
+		// 从状态中获取动态提示词
+		if systemPrompt, ok := state.Metadata["system_prompt"].(string); ok && systemPrompt != "" {
+			log.Printf("📹 [视频分析 PreHandler] 系统提示词已加载，长度：%d", len(systemPrompt))
+		}
+		if userPrompt, ok := state.Metadata["user_prompt"].(string); ok && userPrompt != "" {
+			log.Printf("📹 [视频分析 PreHandler] 用户提示词已加载，长度：%d", len(userPrompt))
+		}
+		return state, nil
+	}))
+	// 添加创作节点，使用 WithStatePreHandler 处理动态提示词
+	g.AddLambdaNode("authoring", authoringLambda, compose.WithStatePreHandler(func(ctx context.Context, state GraphState, gs *GraphState) (GraphState, error) {
+		log.Printf("✍️ [内容创作 PreHandler] 加载动态提示词")
+		// 从状态中获取动态提示词
+		if systemPrompt, ok := state.Metadata["system_prompt"].(string); ok && systemPrompt != "" {
+			log.Printf("✍️ [内容创作 PreHandler] 系统提示词已加载，长度：%d", len(systemPrompt))
+		}
+		if userPrompt, ok := state.Metadata["user_prompt"].(string); ok && userPrompt != "" {
+			log.Printf("✍️ [内容创作 PreHandler] 用户提示词已加载，长度：%d", len(userPrompt))
+		}
+		return state, nil
+	}))
 	g.AddLambdaNode("summary", summaryNode)
 
 	// 添加边：顺序执行
@@ -183,6 +232,23 @@ func (xg *XiaovGraph) buildGraph() error {
 	g.AddEdge("summary", compose.END)
 	g.AddEdge("rag", "summary")
 
+	g.AddBranch("post_processor", compose.NewGraphBranch(
+		func(ctx context.Context, state GraphState) (string, error) {
+			log.Printf("🔀 [Branch 路由] 开始路由决策")
+
+			// 复杂路由逻辑：考虑意图、置信度、工具结果、RAG 上下文
+			targetNode := xg.routeToAgent(state)
+
+			log.Printf("🔀 [Branch 路由] 路由到：%s", targetNode)
+			return targetNode, nil
+		},
+		map[string]bool{
+			"video_analysis":   true,
+			"content_creation": true,
+			"general_chat":     true,
+		},
+	))
+
 	// 编译图
 	runnable, err := g.Compile(ctx)
 	if err != nil {
@@ -191,6 +257,149 @@ func (xg *XiaovGraph) buildGraph() error {
 
 	xg.graph = runnable
 	return nil
+}
+
+// routeToAgent 路由决策逻辑
+func (xg *XiaovGraph) routeToAgent(state GraphState) string {
+	// 计算各 Agent 的得分
+	scores := xg.calculateAgentScores(state)
+
+	log.Printf("🔀 [路由决策] 得分 - 视频分析：%.2f, 内容创作：%.2f, 通用对话：%.2f",
+		scores["video_analysis"], scores["content_creation"], scores["general_chat"])
+
+	// 选择得分最高的 Agent
+	maxScore := 0.0
+	targetNode := "general_chat"
+
+	for agentName, score := range scores {
+		if score > maxScore {
+			maxScore = score
+			targetNode = agentName
+		}
+	}
+
+	// 置信度阈值：如果最高得分低于阈值，使用通用对话
+	if maxScore < 0.6 {
+		log.Printf("🔀 [路由决策] 最高得分 %.2f 低于阈值，使用通用对话", maxScore)
+		return "general_chat"
+	}
+
+	return targetNode
+}
+
+func (xg *XiaovGraph) calculateAgentScores(state GraphState) map[string]float64 {
+	scores := map[string]float64{
+		"video_analysis":   0.0,
+		"content_creation": 0.0,
+		"general_chat":     state.IntentConfidence,
+	}
+
+	// 基于意图类型
+	switch state.Intent {
+	case agent.IntentVideoAnalysis:
+		scores["video_analysis"] = state.IntentConfidence
+	case agent.IntentContentCreation:
+		scores["content_creation"] = state.IntentConfidence
+	default:
+		scores["general_chat"] = state.IntentConfidence
+	}
+
+	// 基于工具结果调整得分
+	for _, tr := range state.ToolResults {
+		if strings.Contains(tr.ToolName, "video") || strings.Contains(tr.ToolName, "frame") {
+			scores["video_analysis"] += 0.15
+		}
+		if strings.Contains(tr.ToolName, "content") || strings.Contains(tr.ToolName, "write") {
+			scores["content_creation"] += 0.15
+		}
+	}
+
+	// 基于 RAG 上下文调整得分
+	if state.RAGContext != "" {
+		if strings.Contains(state.RAGContext, "视频") || strings.Contains(state.RAGContext, "分析") {
+			scores["video_analysis"] += 0.2
+		}
+		if strings.Contains(state.RAGContext, "创作") || strings.Contains(state.RAGContext, "文案") {
+			scores["content_creation"] += 0.2
+		}
+	}
+
+	return scores
+}
+
+// buildDynamicSystemPrompt 构建动态系统提示词
+func (xg *XiaovGraph) buildDynamicSystemPrompt(state GraphState) string {
+	var prompt strings.Builder
+
+	prompt.WriteString("你是小 V，一个专业的 AI 助手。\n\n")
+
+	// 添加 RAG 上下文
+	if state.RAGContext != "" {
+		prompt.WriteString("【相关知识】\n")
+		prompt.WriteString(state.RAGContext)
+		prompt.WriteString("\n\n")
+	}
+
+	// 添加工具结果
+	if len(state.ToolResults) > 0 {
+		prompt.WriteString("【工具执行结果】\n")
+		for _, tr := range state.ToolResults {
+			if tr.Error == "" {
+				prompt.WriteString(fmt.Sprintf("- %s: %v\n", tr.ToolName, tr.Result))
+			} else {
+				prompt.WriteString(fmt.Sprintf("- %s: 错误 - %s\n", tr.ToolName, tr.Error))
+			}
+		}
+		prompt.WriteString("\n")
+	}
+
+	// 根据意图类型添加特定指令
+	switch state.Intent {
+	case agent.IntentVideoAnalysis:
+		prompt.WriteString("【角色】视频分析专家\n")
+		prompt.WriteString("【任务】基于工具执行结果，详细分析视频内容\n")
+		prompt.WriteString("【要求】\n")
+		prompt.WriteString("1. 结构清晰，分点论述\n")
+		prompt.WriteString("2. 重点突出关键信息\n")
+		prompt.WriteString("3. 提供可操作的见解和建议\n")
+	case agent.IntentContentCreation:
+		prompt.WriteString("【角色】内容创作专家\n")
+		prompt.WriteString("【任务】创作高质量、有吸引力的内容\n")
+		prompt.WriteString("【要求】\n")
+		prompt.WriteString("1. 创意新颖独特\n")
+		prompt.WriteString("2. 语言生动有趣\n")
+		prompt.WriteString("3. 符合目标受众喜好\n")
+	default:
+		prompt.WriteString("【角色】通用助手\n")
+		prompt.WriteString("【任务】准确回答用户问题\n")
+		prompt.WriteString("【要求】\n")
+		prompt.WriteString("1. 简洁明了\n")
+		prompt.WriteString("2. 有帮助性\n")
+		prompt.WriteString("3. 友好专业\n")
+	}
+
+	return prompt.String()
+}
+
+// buildDynamicUserPrompt 构建动态用户提示词
+func (xg *XiaovGraph) buildDynamicUserPrompt(state GraphState) string {
+	var prompt strings.Builder
+
+	prompt.WriteString(fmt.Sprintf("用户问题：%s\n", state.OriginalMessage))
+
+	// 如果置信度低，添加提示
+	if state.IntentConfidence < 0.7 {
+		prompt.WriteString("\n【注意】用户意图不太明确，请谨慎理解并回答\n")
+	}
+
+	// 添加工具执行摘要
+	if len(state.ToolResults) > 0 {
+		prompt.WriteString(fmt.Sprintf("\n已执行 %d 个工具获取相关信息\n", len(state.ToolResults)))
+	}
+
+	prompt.WriteString("\n请基于以上所有信息（相关知识、工具执行结果），给出专业、准确的回答。")
+
+	return prompt.String()
 }
 
 // 实现 RAG 检索节点
@@ -846,13 +1055,12 @@ func (xg *XiaovGraph) buildFallbackResponse(state GraphState) string {
 // Execute 执行图编排
 func (xg *XiaovGraph) Execute(ctx context.Context, input XiaovInput) (*XiaovOutput, error) {
 	if input.SessionID == "" {
-		input.SessionID = uuid.New().String()
+		input.SessionID = fmt.Sprintf("session_%d", time.Now().UnixMilli())
 	}
 
-	log.Printf("🚀 [图编排] ========== 开始执行企业级图编排 ==========")
+	log.Printf("🚀 [图编排] ========== 开始执行图编排 ==========")
 	log.Printf("🚀 [图编排] SessionID: %s | UserID: %s", input.SessionID, input.UserID)
 	log.Printf("🚀 [图编排] 用户消息: %s", input.Message)
-	log.Printf("🚀 [图编排] 图结构: START -> 意图识别 -> 工具选择 -> 工具执行 -> 分析 -> 总结 -> END")
 
 	startTime := time.Now()
 	output, err := xg.graph.Invoke(ctx, input)
