@@ -225,12 +225,10 @@ func (xg *XiaovGraph) buildGraph() error {
 	g.AddEdge("intent", "tool_selection")
 	g.AddEdge("intent", "rag")
 	g.AddEdge("tool_selection", "tool_execution")
-	g.AddEdge("tool_execution", "analysis")
-	g.AddEdge("tool_execution", "authoring")
-	g.AddEdge("analysis", "summary")
-	g.AddEdge("authoring", "summary")
-	g.AddEdge("summary", compose.END)
-	g.AddEdge("rag", "summary")
+	// 工具执行后进入后置处理器（不再直接连接到 analysis 和 authoring）
+	g.AddEdge("tool_execution", "post_processor")
+	// RAG 检索结果也传递给后置处理器
+	g.AddEdge("rag", "post_processor")
 
 	g.AddBranch("post_processor", compose.NewGraphBranch(
 		func(ctx context.Context, state GraphState) (string, error) {
@@ -243,11 +241,14 @@ func (xg *XiaovGraph) buildGraph() error {
 			return targetNode, nil
 		},
 		map[string]bool{
-			"video_analysis":   true,
-			"content_creation": true,
-			"general_chat":     true,
+			"analysis":     true,
+			"authoring":    true,
+			"general_chat": true,
 		},
 	))
+
+	// 连接各 Agent 节点到 summary（Branch 选中的节点才会执行）
+	g.AddEdge("general_chat", "summary")
 
 	// 编译图
 	runnable, err := g.Compile(ctx)
