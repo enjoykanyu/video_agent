@@ -275,26 +275,66 @@ func (xg *XiaovGraph) buildGraph() error {
 func (xg *XiaovGraph) executeVideoAnalysisTools(ctx context.Context, state GraphState) GraphState {
 	log.Printf("🔧 [视频分析工具] 开始执行视频相关工具")
 
-	// 模拟工具执行
-	toolResults := []ToolExecutionResult{
-		{
-			ToolName:   "video_downloader",
-			Result:     "视频下载成功",
-			StartTime:  time.Now(),
-			EndTime:    time.Now(),
-			DurationMs: 100,
-		},
-		{
-			ToolName:   "frame_extractor",
-			Result:     "提取关键帧 10 张",
-			StartTime:  time.Now(),
-			EndTime:    time.Now(),
-			DurationMs: 200,
-		},
+	// 定义视频分析需要调用的工具列表
+	videoTools := []string{"video_downloader", "frame_extractor", "speech_transcriber"}
+
+	toolResults := make([]ToolExecutionResult, 0)
+	successCount := 0
+
+	for _, toolName := range videoTools {
+		toolStartTime := time.Now()
+
+		// 构建工具参数
+		params := make(map[string]interface{})
+		if state.VideoID != "" {
+			params["video_id"] = state.VideoID
+		}
+		if state.OriginalMessage != "" {
+			params["query"] = state.OriginalMessage
+		}
+
+		// 调用 MCP 工具
+		result, err := xg.mcpManager.ExecuteTool(ctx, toolName, params)
+
+		toolEndTime := time.Now()
+		durationMs := toolEndTime.Sub(toolStartTime).Milliseconds()
+
+		toolResult := ToolExecutionResult{
+			ToolName:   toolName,
+			Params:     params,
+			Result:     result,
+			StartTime:  toolStartTime,
+			EndTime:    toolEndTime,
+			DurationMs: durationMs,
+		}
+
+		if err != nil {
+			toolResult.Error = err.Error()
+			log.Printf("❌ [视频分析工具] 工具 %s 执行失败：%v", toolName, err)
+			
+			// 降级策略：如果工具不存在，记录警告但继续执行其他工具
+			if strings.Contains(err.Error(), "tool not found") || strings.Contains(err.Error(), "not available") {
+				log.Printf("⚠️ [视频分析工具] 工具 %s 不可用，跳过此工具", toolName)
+				continue
+			}
+		} else {
+			log.Printf("✅ [视频分析工具] 工具 %s 执行成功，耗时：%dms", toolName, durationMs)
+			successCount++
+		}
+
+		toolResults = append(toolResults, toolResult)
 	}
 
 	state.ToolResults = append(state.ToolResults, toolResults...)
 	state.Metadata["video_tools_executed"] = true
+	state.Metadata["video_tools_count"] = len(toolResults)
+	state.Metadata["video_tools_success_count"] = successCount
+
+	// 如果所有工具都失败，记录警告
+	if len(toolResults) > 0 && successCount == 0 {
+		log.Printf("⚠️ [视频分析工具] 所有视频工具执行失败，将使用基础分析")
+		state.Metadata["video_tools_all_failed"] = true
+	}
 
 	return state
 }
@@ -303,26 +343,69 @@ func (xg *XiaovGraph) executeVideoAnalysisTools(ctx context.Context, state Graph
 func (xg *XiaovGraph) executeContentCreationTools(ctx context.Context, state GraphState) GraphState {
 	log.Printf("🔧 [内容创作工具] 开始执行创作相关工具")
 
-	// 模拟工具执行
-	toolResults := []ToolExecutionResult{
-		{
-			ToolName:   "trend_analyzer",
-			Result:     "分析当前流行趋势",
-			StartTime:  time.Now(),
-			EndTime:    time.Now(),
-			DurationMs: 150,
-		},
-		{
-			ToolName:   "keyword_extractor",
-			Result:     "提取关键词 5 个",
-			StartTime:  time.Now(),
-			EndTime:    time.Now(),
-			DurationMs: 80,
-		},
+	// 定义内容创作需要调用的工具列表
+	creationTools := []string{"trend_analyzer", "keyword_extractor", "content_generator"}
+
+	toolResults := make([]ToolExecutionResult, 0)
+	successCount := 0
+
+	for _, toolName := range creationTools {
+		toolStartTime := time.Now()
+
+		// 构建工具参数
+		params := make(map[string]interface{})
+		if state.OriginalMessage != "" {
+			params["topic"] = state.OriginalMessage
+		}
+		if state.Metadata["target_audience"] != nil {
+			params["target_audience"] = state.Metadata["target_audience"]
+		}
+		if state.Metadata["tone"] != nil {
+			params["tone"] = state.Metadata["tone"]
+		}
+
+		// 调用 MCP 工具
+		result, err := xg.mcpManager.ExecuteTool(ctx, toolName, params)
+
+		toolEndTime := time.Now()
+		durationMs := toolEndTime.Sub(toolStartTime).Milliseconds()
+
+		toolResult := ToolExecutionResult{
+			ToolName:   toolName,
+			Params:     params,
+			Result:     result,
+			StartTime:  toolStartTime,
+			EndTime:    toolEndTime,
+			DurationMs: durationMs,
+		}
+
+		if err != nil {
+			toolResult.Error = err.Error()
+			log.Printf("❌ [内容创作工具] 工具 %s 执行失败：%v", toolName, err)
+			
+			// 降级策略：如果工具不存在，记录警告但继续执行其他工具
+			if strings.Contains(err.Error(), "tool not found") || strings.Contains(err.Error(), "not available") {
+				log.Printf("⚠️ [内容创作工具] 工具 %s 不可用，跳过此工具", toolName)
+				continue
+			}
+		} else {
+			log.Printf("✅ [内容创作工具] 工具 %s 执行成功，耗时：%dms", toolName, durationMs)
+			successCount++
+		}
+
+		toolResults = append(toolResults, toolResult)
 	}
 
 	state.ToolResults = append(state.ToolResults, toolResults...)
 	state.Metadata["creation_tools_executed"] = true
+	state.Metadata["creation_tools_count"] = len(toolResults)
+	state.Metadata["creation_tools_success_count"] = successCount
+
+	// 如果所有工具都失败，记录警告
+	if len(toolResults) > 0 && successCount == 0 {
+		log.Printf("⚠️ [内容创作工具] 所有创作工具执行失败，将使用基础创作")
+		state.Metadata["creation_tools_all_failed"] = true
+	}
 
 	return state
 }
