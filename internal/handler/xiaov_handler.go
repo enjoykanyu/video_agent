@@ -13,15 +13,20 @@ import (
 	"github.com/google/uuid"
 
 	"video_agent/internal/agent"
+	"video_agent/internal/mcp"
 	"video_agent/internal/memory"
+	"video_agent/internal/orchestrator"
+	"video_agent/mcp_client"
+	"video_agent/rag"
 )
 
 // XiaovHandler 小V助手Handler
 type XiaovHandler struct {
-	llm           *ollama.ChatModel
-	intentAgent   *agent.IntentRecognitionAgent
-	memoryManager *memory.MemoryManager
-	sessionStore  map[string]*SessionContext
+	llm              *ollama.ChatModel
+	intentAgent      *agent.IntentRecognitionAgent
+	memoryManager    *memory.MemoryManager
+	sessionStore     map[string]*SessionContext
+	planExecuteGraph *orchestrator.PlanExecuteGraph
 }
 
 // SessionContext 会话上下文
@@ -54,12 +59,39 @@ func NewXiaovHandler() (*XiaovHandler, error) {
 		memory.NewLongTermMemory(nil, nil, nil),
 		memory.NewWorkingMemory(100),
 	)
+	// 创建MCP管理器
+	mcpConfig := &mcp.ManagerConfig{
+		RemoteConfig: &mcp_client.Config{
+			Transport: "sse", // 使用SSE传输方式
+			Server: mcp_client.ServerConfig{
+				URL: "http://localhost:50051/sse", // MCP Server SSE端点
+			},
+		},
+	}
+	mcpManager, err := mcp.NewManager(mcpConfig)
+	if err != nil {
+		return nil, fmt.Errorf("创建MCP管理器失败: %w", err)
+	}
+
+	var ragManager *rag.RAGManager // 如果需要RAG，初始化这里
+
+	planExecuteGraph, err := orchestrator.NewPlanExecuteGraph(
+		chatModel,
+		intentAgent,
+		memoryManager,
+		mcpManager,
+		ragManager,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建PlanExecuteGraph失败: %w", err)
+	}
 
 	return &XiaovHandler{
-		llm:           chatModel,
-		intentAgent:   intentAgent,
-		memoryManager: memoryManager,
-		sessionStore:  make(map[string]*SessionContext),
+		llm:              chatModel,
+		intentAgent:      intentAgent,
+		memoryManager:    memoryManager,
+		sessionStore:     make(map[string]*SessionContext),
+		planExecuteGraph: planExecuteGraph,
 	}, nil
 }
 
@@ -72,13 +104,15 @@ type ChatRequest struct {
 
 // ChatResponse 聊天响应
 type ChatResponse struct {
-	Code      int32             `json:"code"`
-	Message   string            `json:"message"`
-	Reply     string            `json:"reply"`
-	SessionID string            `json:"session_id"`
-	Intent    string            `json:"intent"`
-	Timestamp int64             `json:"timestamp"`
-	Metadata  map[string]string `json:"metadata"`
+	Code      int32                       `json:"code"`
+	Message   string                      `json:"message"`
+	Reply     string                      `json:"reply"`
+	SessionID string                      `json:"session_id"`
+	Intent    string                      `json:"intent"`
+	Plan      *orchestrator.ExecutionPlan `json:"plan,omitempty"` // 【新增】
+	Steps     []orchestrator.StepResult   `json:"steps,omitempty"`
+	Timestamp int64                       `json:"timestamp"`
+	Metadata  map[string]string           `json:"metadata"`
 }
 
 // Chat 处理聊天请求
@@ -98,70 +132,34 @@ func (h *XiaovHandler) Chat(c *gin.Context) {
 		sessionID = uuid.New().String()
 	}
 
-	// 获取或创建会话上下文
-	ctx := h.getOrCreateSession(sessionID, req.UserID)
-
-	// 记录用户消息到记忆系统
-	userMemory := memory.Memory{
-		ID:        uuid.New().String(),
+	input := orchestrator.PlanExecuteInput{
 		SessionID: sessionID,
-		Content:   req.Message,
-		Type:      memory.MemoryTypeUser,
-		CreatedAt: time.Now(),
-		Metadata: map[string]interface{}{
-			"user_id": req.UserID,
-		},
+		UserID:    req.UserID,
+		Message:   req.Message,
 	}
-	h.memoryManager.Store(context.Background(), userMemory)
 
-	// 构建消息列表
-	messages := h.buildMessages(ctx, req.Message)
-
-	// 调用大模型生成回复
-	startTime := time.Now()
-	response, err := h.llm.Generate(context.Background(), messages)
+	output, err := h.planExecuteGraph.Execute(context.Background(), input)
 	if err != nil {
 		c.JSON(http.StatusOK, ChatResponse{
 			Code:      500,
-			Message:   "模型调用失败: " + err.Error(),
+			Message:   "处理失败: " + err.Error(),
 			SessionID: sessionID,
 			Timestamp: time.Now().UnixMilli(),
 		})
 		return
 	}
 
-	latency := time.Since(startTime)
-
-	// 识别用户意图
-	intent, _ := h.intentAgent.Recognize(context.Background(), req.Message)
-
-	// 记录助手回复到记忆系统
-	assistantMemory := memory.Memory{
-		ID:        uuid.New().String(),
-		SessionID: sessionID,
-		Content:   response.Content,
-		Type:      memory.MemoryTypeAssistant,
-		CreatedAt: time.Now(),
-		Metadata: map[string]interface{}{
-			"user_id": req.UserID,
-		},
-	}
-	h.memoryManager.Store(context.Background(), assistantMemory)
-
-	// 更新会话历史
-	ctx.LastActiveAt = time.Now()
-
 	c.JSON(http.StatusOK, ChatResponse{
 		Code:      0,
 		Message:   "success",
-		Reply:     response.Content,
-		SessionID: sessionID,
-		Intent:    string(intent.Type),
-		Timestamp: time.Now().UnixMilli(),
+		Reply:     output.Reply,
+		SessionID: output.SessionID,
+		Intent:    output.Intent,
+		Plan:      output.Plan,  // 【新增】返回执行计划
+		Steps:     output.Steps, // 【新增】返回执行步骤
+		Timestamp: output.Timestamp,
 		Metadata: map[string]string{
-			"latency_ms":    fmt.Sprintf("%d", latency.Milliseconds()),
-			"history_count": "0",
-			"user_id":       req.UserID,
+			"agent": output.Agent,
 		},
 	})
 }

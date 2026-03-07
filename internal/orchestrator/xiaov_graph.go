@@ -22,10 +22,6 @@ import (
 	"video_agent/rag"
 )
 
-// =============================================================================
-// 类型定义
-// =============================================================================
-
 // XiaovInput 小V助手输入
 type XiaovInput struct {
 	SessionID string `json:"session_id"`
@@ -87,10 +83,6 @@ type XiaovGraph struct {
 	mcpManager    *mcp.Manager
 	ragManager    *rag.RAGManager
 }
-
-// =============================================================================
-// 构造函数
-// =============================================================================
 
 // NewXiaovGraph 创建小V助手图编排器
 func NewXiaovGraph(
@@ -169,14 +161,16 @@ func (xg *XiaovGraph) buildGraph() error {
 	summaryNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (XiaovOutput, error) {
 		return xg.summaryNode(ctx, state)
 	})
+
+	// 【改进】后置处理器节点 - 在工具执行后构建提示词
 	postProcessorNode := compose.InvokableLambda(func(ctx context.Context, state GraphState) (GraphState, error) {
-		log.Printf("⚙️ [后置处理器] 开始构建动态提示词")
+		log.Printf("⚙️ [后置处理器] 当前工具结果数：%d", len(state.ToolResults))
 
-		// 构建系统提示词
-		systemPrompt := xg.buildDynamicSystemPrompt(state)
+		// 构建系统提示词（固定部分）
+		systemPrompt := xg.buildSystemPrompt(state.Intent)
 
-		// 构建用户提示词
-		userPrompt := xg.buildDynamicUserPrompt(state)
+		// 构建用户提示词（包含上游输出：工具结果、RAG上下文）
+		userPrompt := xg.buildUserPrompt(state)
 
 		state.Metadata["system_prompt"] = systemPrompt
 		state.Metadata["user_prompt"] = userPrompt
@@ -192,43 +186,38 @@ func (xg *XiaovGraph) buildGraph() error {
 	g.AddLambdaNode("intent", intentNode)
 	g.AddLambdaNode("tool_selection", toolSelectionNode)
 	g.AddLambdaNode("tool_execution", toolExecutionNode)
-	// 添加后置处理器节点，负责构建动态提示词
+	// 【改进】后置处理器节点在工具执行后构建提示词
 	g.AddLambdaNode("post_processor", postProcessorNode)
-	// 添加分析节点，使用 WithStatePreHandler 处理动态提示词
-	g.AddLambdaNode("analysis", analysisLambda, compose.WithStatePreHandler(func(ctx context.Context, state GraphState, gs *GraphState) (GraphState, error) {
-		log.Printf("📹 [视频分析 PreHandler] 加载动态提示词")
-		// 从状态中获取动态提示词
-		if systemPrompt, ok := state.Metadata["system_prompt"].(string); ok && systemPrompt != "" {
-			log.Printf("📹 [视频分析 PreHandler] 系统提示词已加载，长度：%d", len(systemPrompt))
-		}
-		if userPrompt, ok := state.Metadata["user_prompt"].(string); ok && userPrompt != "" {
-			log.Printf("📹 [视频分析 PreHandler] 用户提示词已加载，长度：%d", len(userPrompt))
-		}
-		return state, nil
-	}))
-	// 添加创作节点，使用 WithStatePreHandler 处理动态提示词
-	g.AddLambdaNode("authoring", authoringLambda, compose.WithStatePreHandler(func(ctx context.Context, state GraphState, gs *GraphState) (GraphState, error) {
-		log.Printf("✍️ [内容创作 PreHandler] 加载动态提示词")
-		// 从状态中获取动态提示词
-		if systemPrompt, ok := state.Metadata["system_prompt"].(string); ok && systemPrompt != "" {
-			log.Printf("✍️ [内容创作 PreHandler] 系统提示词已加载，长度：%d", len(systemPrompt))
-		}
-		if userPrompt, ok := state.Metadata["user_prompt"].(string); ok && userPrompt != "" {
-			log.Printf("✍️ [内容创作 PreHandler] 用户提示词已加载，长度：%d", len(userPrompt))
-		}
-		return state, nil
-	}))
+	// 添加分析节点
+	g.AddLambdaNode("analysis", analysisLambda)
+	// 添加创作节点
+	g.AddLambdaNode("authoring", authoringLambda)
 	g.AddLambdaNode("summary", summaryNode)
 
-	// 添加边：意图识别后通过 Branch 路由到不同 Agent
+	// 添加边：构建正确的执行流程
+	// START -> 意图识别
 	g.AddEdge(compose.START, "intent")
-
-	// Branch 路由：根据意图识别的 actionKey 路由到对应 Agent
-	g.AddBranch("intent", compose.NewGraphBranch(
+	
+	// 意图识别 -> RAG检索（并行准备）
+	g.AddEdge("intent", "rag")
+	
+	// 意图识别 -> 工具选择
+	g.AddEdge("intent", "tool_selection")
+	
+	// 工具选择 -> 工具执行
+	g.AddEdge("tool_selection", "tool_execution")
+	
+	// 【关键改进】工具执行 -> 后置处理器（确保 ToolResults 已填充）
+	g.AddEdge("tool_execution", "post_processor")
+	
+	// RAG检索 -> 后置处理器（确保 RAGContext 已填充）
+	g.AddEdge("rag", "post_processor")
+	
+	// 后置处理器 -> Branch 路由
+	g.AddBranch("post_processor", compose.NewGraphBranch(
 		func(ctx context.Context, state GraphState) (string, error) {
 			log.Printf("🔀 [Branch 路由] 开始路由决策，Intent: %s", state.Intent)
 
-			// 根据意图类型路由到对应 Agent
 			switch state.Intent {
 			case agent.IntentVideoAnalysis:
 				log.Printf("🔀 [Branch 路由] 路由到视频分析 Agent")
@@ -240,22 +229,20 @@ func (xg *XiaovGraph) buildGraph() error {
 				log.Printf("🔀 [Branch 路由] 路由到通用知识库 Agent")
 				return "general_chat", nil
 			default:
-				// 置信度低于阈值或未知意图，使用通用对话
 				if state.IntentConfidence < 0.6 {
 					log.Printf("🔀 [Branch 路由] 置信度低于阈值，路由到通用对话")
 				}
 				return "general_chat", nil
 			}
 		},
-		// 可能的目标节点（必须与 AddLambdaNode 的名称一致）
 		map[string]bool{
-			"analysis":     true, // 视频分析 Agent
-			"authoring":    true, // 内容创作 Agent
-			"general_chat": true, // 通用知识库 Agent
+			"analysis":     true,
+			"authoring":    true,
+			"general_chat": true,
 		},
 	))
 
-	// 连接各 Agent 节点到 summary（Branch 选中的节点才会执行）
+	// 连接各 Agent 节点到 summary
 	g.AddEdge("analysis", "summary")
 	g.AddEdge("authoring", "summary")
 	g.AddEdge("general_chat", "summary")
@@ -311,7 +298,7 @@ func (xg *XiaovGraph) executeVideoAnalysisTools(ctx context.Context, state Graph
 		if err != nil {
 			toolResult.Error = err.Error()
 			log.Printf("❌ [视频分析工具] 工具 %s 执行失败：%v", toolName, err)
-			
+
 			// 降级策略：如果工具不存在，记录警告但继续执行其他工具
 			if strings.Contains(err.Error(), "tool not found") || strings.Contains(err.Error(), "not available") {
 				log.Printf("⚠️ [视频分析工具] 工具 %s 不可用，跳过此工具", toolName)
@@ -382,7 +369,7 @@ func (xg *XiaovGraph) executeContentCreationTools(ctx context.Context, state Gra
 		if err != nil {
 			toolResult.Error = err.Error()
 			log.Printf("❌ [内容创作工具] 工具 %s 执行失败：%v", toolName, err)
-			
+
 			// 降级策略：如果工具不存在，记录警告但继续执行其他工具
 			if strings.Contains(err.Error(), "tool not found") || strings.Contains(err.Error(), "not available") {
 				log.Printf("⚠️ [内容创作工具] 工具 %s 不可用，跳过此工具", toolName)
@@ -410,79 +397,110 @@ func (xg *XiaovGraph) executeContentCreationTools(ctx context.Context, state Gra
 	return state
 }
 
-// buildDynamicSystemPrompt 构建动态系统提示词
+// buildSystemPrompt 构建固定系统提示词（按意图类型）
+func (xg *XiaovGraph) buildSystemPrompt(intent agent.IntentType) string {
+	switch intent {
+	case agent.IntentVideoAnalysis:
+		return `你是小V，一个专业的视频分析专家。
+
+【角色定位】
+- 你擅长分析视频内容、数据表现和用户互动
+- 你能够从视频数据中提取关键洞察和 actionable 建议
+
+【任务要求】
+1. 结构清晰，分点论述
+2. 重点突出关键信息  
+3. 提供可操作的见解和建议
+4. 基于提供的工具执行结果进行分析，不要编造数据`
+
+	case agent.IntentContentCreation:
+		return `你是小V，一个专业的内容创作专家。
+
+【角色定位】
+- 你擅长创作高质量、有吸引力的内容
+- 你了解不同平台的内容特点和用户喜好
+
+【任务要求】
+1. 创意新颖独特
+2. 语言生动有趣
+3. 符合目标受众喜好
+4. 基于提供的工具执行结果进行创作`
+
+	default:
+		return `你是小V，一个友好的AI助手。
+
+【角色定位】
+- 你擅长回答用户的各类问题
+- 你提供简洁、有帮助、专业的回答
+
+【任务要求】
+1. 简洁明了
+2. 有帮助性
+3. 友好专业`
+	}
+}
+
+// 【废弃】原动态系统提示词构建方法，已拆分为固定系统提示词 + 动态用户提示词
+// 保留此方法用于向后兼容
 func (xg *XiaovGraph) buildDynamicSystemPrompt(state GraphState) string {
+	return xg.buildSystemPrompt(state.Intent)
+}
+
+// buildUserPrompt 构建动态用户提示词 - 包含上游节点输出
+func (xg *XiaovGraph) buildUserPrompt(state GraphState) string {
 	var prompt strings.Builder
 
-	prompt.WriteString("你是小 V，一个专业的 AI 助手。\n\n")
+	// 1. 用户原始问题
+	prompt.WriteString(fmt.Sprintf("用户问题：%s\n", state.OriginalMessage))
 
-	// 添加 RAG 上下文
+	// 2. 【上游输出】RAG检索上下文
 	if state.RAGContext != "" {
-		prompt.WriteString("【相关知识】\n")
+		prompt.WriteString("\n【相关知识】\n")
 		prompt.WriteString(state.RAGContext)
-		prompt.WriteString("\n\n")
 	}
 
-	// 添加工具结果
+	// 3. 【上游输出】工具执行结果（关键：此时 ToolResults 已被填充）
 	if len(state.ToolResults) > 0 {
-		prompt.WriteString("【工具执行结果】\n")
+		prompt.WriteString("\n【工具执行结果】\n")
 		for _, tr := range state.ToolResults {
 			if tr.Error == "" {
-				prompt.WriteString(fmt.Sprintf("- %s: %v\n", tr.ToolName, tr.Result))
+				// 格式化工具结果为JSON字符串
+				resultJSON, _ := json.Marshal(tr.Result)
+				prompt.WriteString(fmt.Sprintf("- %s: %s\n", tr.ToolName, string(resultJSON)))
 			} else {
 				prompt.WriteString(fmt.Sprintf("- %s: 错误 - %s\n", tr.ToolName, tr.Error))
 			}
 		}
-		prompt.WriteString("\n")
 	}
 
-	// 根据意图类型添加特定指令
+	// 4. 置信度提示
+	if state.IntentConfidence < 0.7 {
+		prompt.WriteString("\n【注意】用户意图不太明确，请谨慎理解并回答\n")
+	}
+
+	// 5. 任务指令
+	prompt.WriteString("\n")
 	switch state.Intent {
 	case agent.IntentVideoAnalysis:
-		prompt.WriteString("【角色】视频分析专家\n")
-		prompt.WriteString("【任务】基于工具执行结果，详细分析视频内容\n")
-		prompt.WriteString("【要求】\n")
-		prompt.WriteString("1. 结构清晰，分点论述\n")
-		prompt.WriteString("2. 重点突出关键信息\n")
-		prompt.WriteString("3. 提供可操作的见解和建议\n")
+		prompt.WriteString("请基于以上视频数据进行分析，提供：\n")
+		prompt.WriteString("1. 视频内容摘要\n")
+		prompt.WriteString("2. 数据表现分析\n")
+		prompt.WriteString("3. 关键洞察和建议\n")
 	case agent.IntentContentCreation:
-		prompt.WriteString("【角色】内容创作专家\n")
-		prompt.WriteString("【任务】创作高质量、有吸引力的内容\n")
-		prompt.WriteString("【要求】\n")
-		prompt.WriteString("1. 创意新颖独特\n")
-		prompt.WriteString("2. 语言生动有趣\n")
-		prompt.WriteString("3. 符合目标受众喜好\n")
+		prompt.WriteString("请基于以上信息创作内容，要求：\n")
+		prompt.WriteString("1. 内容新颖有创意\n")
+		prompt.WriteString("2. 符合平台调性\n")
+		prompt.WriteString("3. 有吸引力且易传播\n")
 	default:
-		prompt.WriteString("【角色】通用助手\n")
-		prompt.WriteString("【任务】准确回答用户问题\n")
-		prompt.WriteString("【要求】\n")
-		prompt.WriteString("1. 简洁明了\n")
-		prompt.WriteString("2. 有帮助性\n")
-		prompt.WriteString("3. 友好专业\n")
+		prompt.WriteString("请基于以上信息给出专业、准确的回答。")
 	}
 
 	return prompt.String()
 }
 
-// buildDynamicUserPrompt 构建动态用户提示词
+// 【废弃】保留原方法名用于向后兼容
 func (xg *XiaovGraph) buildDynamicUserPrompt(state GraphState) string {
-	var prompt strings.Builder
-
-	prompt.WriteString(fmt.Sprintf("用户问题：%s\n", state.OriginalMessage))
-
-	// 如果置信度低，添加提示
-	if state.IntentConfidence < 0.7 {
-		prompt.WriteString("\n【注意】用户意图不太明确，请谨慎理解并回答\n")
-	}
-
-	// 添加工具执行摘要
-	if len(state.ToolResults) > 0 {
-		prompt.WriteString(fmt.Sprintf("\n已执行 %d 个工具获取相关信息\n", len(state.ToolResults)))
-	}
-
-	prompt.WriteString("\n请基于以上所有信息（相关知识、工具执行结果），给出专业、准确的回答。")
-
-	return prompt.String()
+	return xg.buildUserPrompt(state)
 }
 
 // 实现 RAG 检索节点
@@ -870,11 +888,47 @@ func (xg *XiaovGraph) extractVideoID(message string) string {
 
 // performVideoAnalysis 执行视频分析
 func (xg *XiaovGraph) performVideoAnalysis(ctx context.Context, state GraphState) (string, error) {
-	// 提取实际的视频数据，而不是整个 ToolResults 结构
+	// 【改进】使用 post_processor 构建的提示词
+	systemPrompt := ""
+	userPrompt := ""
+	
+	if sp, ok := state.Metadata["system_prompt"].(string); ok {
+		systemPrompt = sp
+	}
+	if up, ok := state.Metadata["user_prompt"].(string); ok {
+		userPrompt = up
+	}
+	
+	// 如果 post_processor 没有构建提示词，回退到原有逻辑
+	if systemPrompt == "" || userPrompt == "" {
+		log.Printf("⚠️ [视频分析] 未找到 post_processor 构建的提示词，使用回退逻辑")
+		return xg.performVideoAnalysisLegacy(ctx, state)
+	}
+	
+	log.Printf("📹 [视频分析] 使用 post_processor 构建的提示词")
+	log.Printf("📹 [视频分析] 系统提示词长度: %d, 用户提示词长度: %d", len(systemPrompt), len(userPrompt))
+
+	messages := []*schema.Message{
+		{Role: schema.System, Content: systemPrompt},
+		{Role: schema.User, Content: userPrompt},
+	}
+
+	analysisCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	response, err := xg.llm.Generate(analysisCtx, messages)
+	if err != nil {
+		return "", fmt.Errorf("视频分析失败: %w", err)
+	}
+
+	return response.Content, nil
+}
+
+// performVideoAnalysisLegacy 原有视频分析方法（回退用）
+func (xg *XiaovGraph) performVideoAnalysisLegacy(ctx context.Context, state GraphState) (string, error) {
 	videoData := xg.extractVideoDataFromToolResults(state.ToolResults)
 	videoDataJSON, _ := json.MarshalIndent(videoData, "", "  ")
 
-	// 优化提示词，明确数据位置和格式
 	prompt := fmt.Sprintf(`请基于以下视频数据进行分析和总结。
 
 视频数据（JSON格式）：
@@ -899,8 +953,6 @@ func (xg *XiaovGraph) performVideoAnalysis(ctx context.Context, state GraphState
 		{Role: schema.User, Content: prompt},
 	}
 
-	// 设置超时时间为 5 分钟，比 Ollama 的 6 分钟超时稍短
-	// 给模型足够时间处理，同时确保能捕获超时错误
 	analysisCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
