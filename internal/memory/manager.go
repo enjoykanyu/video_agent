@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -141,6 +142,11 @@ func NewLongTermMemory(
 
 // Store 存储长期记忆
 func (m *LongTermMemory) Store(ctx context.Context, memory Memory) error {
+	// 如果 LongTermMemory 未正确初始化，跳过存储
+	if m.vectorStore == nil || m.metadataStore == nil {
+		return fmt.Errorf("long term memory not properly initialized")
+	}
+
 	// 生成嵌入向量
 	if len(memory.Embedding) == 0 && m.embeddingFunc != nil {
 		embedding, err := m.embeddingFunc(ctx, memory.Content)
@@ -311,9 +317,10 @@ func (m *MemoryManager) Store(ctx context.Context, memory Memory) error {
 	}
 
 	// 根据重要性存储到长期记忆
-	if memory.Importance > 0.7 {
+	if memory.Importance > 0.7 && m.longTerm != nil {
 		if err := m.longTerm.Store(ctx, memory); err != nil {
-			return err
+			// 长期记忆存储失败不阻塞主流程，只记录日志
+			log.Printf("⚠️ 长期记忆存储失败: %v", err)
 		}
 	}
 
