@@ -11,11 +11,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"video_agent/internal/biz"
+	"video_agent/internal/agent"
+	"video_agent/mcp_server"
 )
 
 type XiaovHandler struct {
-	uc *biz.VideoAssistantUsecase
+	uc *agent.VideoAssistantUsecase
 }
 
 type SessionContext struct {
@@ -25,11 +26,11 @@ type SessionContext struct {
 	LastActiveAt time.Time `json:"last_active_at"`
 }
 
-func NewXiaovHandler(uc *biz.VideoAssistantUsecase) *XiaovHandler {
+func NewXiaovHandler(uc *agent.VideoAssistantUsecase) *XiaovHandler {
 	return &XiaovHandler{uc: uc}
 }
 
-func (h *XiaovHandler) GetUsecase() *biz.VideoAssistantUsecase {
+func (h *XiaovHandler) GetUsecase() *agent.VideoAssistantUsecase {
 	return h.uc
 }
 
@@ -124,16 +125,37 @@ func (h *XiaovHandler) StreamChat(c *gin.Context) {
 }
 
 func InitHandler(ctx context.Context) (*XiaovHandler, error) {
-	var repo biz.VideoAssistantRepo
-	var ragRetriever biz.RAGDocsRetriever
-	var mcpServers []biz.MCPServer
+	var repo agent.VideoAssistantRepo
+	var ragRetriever agent.RAGDocsRetriever
+
+	// 1. 启动 MCP Server (在后台运行)
+	mcpSrv := mcp_server.NewVideoServer("http://localhost:50090")
+	go func() {
+		if err := mcpSrv.Start(":9090"); err != nil {
+			fmt.Printf("⚠️ [Handler] MCP Server 启动失败: %v\n", err)
+		}
+	}()
+	fmt.Println("✅ [Handler] MCP Server 启动中 :9090")
+
+	// 等待 MCP Server 启动
+	time.Sleep(500 * time.Millisecond)
+
+	// 2. 配置 MCP Servers（连接到刚启动的 MCP Server）
+	mcpServers := []agent.MCPServer{
+		{
+			UID:    "video-mcp-1",
+			Name:   "video-mcp",
+			URL:    "http://localhost:9090/mcp/sse",
+			Status: 1,
+		},
+	}
 
 	llm, err := newLLM(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create llm failed: %w", err)
 	}
 
-	uc, err := biz.NewVideoAssistantUsecase(repo, llm, ragRetriever)
+	uc, err := agent.NewVideoAssistantUsecase(repo, llm, ragRetriever)
 	if err != nil {
 		return nil, fmt.Errorf("create usecase failed: %w", err)
 	}

@@ -58,8 +58,6 @@ func (vg *VideoGraph) buildGraph(scheduler *VideoGraphScheduler) error {
 			return scheduler
 		}))
 
-	_ = g.AddPassthroughNode("decision")
-
 	videoModel := vg.llm
 	analysisModel := vg.llm
 	creationModel := vg.llm
@@ -117,43 +115,7 @@ func (vg *VideoGraph) buildGraph(scheduler *VideoGraphScheduler) error {
 		}),
 		compose.WithNodeName("summary"))
 
-	_ = g.AddEdge(compose.START, "decision")
-
-	_ = g.AddBranch("decision", compose.NewGraphBranch(
-		func(ctx context.Context, in []*schema.Message) (string, error) {
-			var next string
-			err := compose.ProcessState(ctx, func(ctx context.Context, state *VideoGraphScheduler) error {
-				if len(state.Agents) == 0 || state.AgentIndex >= len(state.Agents) {
-					next = "summary"
-					return nil
-				}
-
-				switch state.Agents[state.AgentIndex] {
-				case AgentTypeVideo:
-					next = "video_agent"
-				case AgentTypeAnalysis:
-					next = "analysis_agent"
-				case AgentTypeCreation:
-					next = "creation_agent"
-				case AgentTypeReport:
-					next = "report_agent"
-				default:
-					next = "summary"
-				}
-				return nil
-			})
-			if err != nil {
-				return "", err
-			}
-			return next, nil
-		},
-		map[string]bool{
-			"video_agent":    true,
-			"analysis_agent": true,
-			"creation_agent": true,
-			"report_agent":   true,
-			"summary":        true,
-		}))
+	_ = g.AddEdge(compose.START, "supervisor")
 
 	_ = g.AddBranch("supervisor", compose.NewGraphBranch(
 		func(ctx context.Context, in *schema.Message) (string, error) {
@@ -162,7 +124,15 @@ func (vg *VideoGraph) buildGraph(scheduler *VideoGraphScheduler) error {
 			}
 
 			var decision *SupervisorDecision
+			var isContinue bool
+
 			err := compose.ProcessState(ctx, func(ctx context.Context, state *VideoGraphScheduler) error {
+				if len(state.Agents) > 0 && state.AgentIndex < len(state.Agents) {
+					isContinue = true
+					state.AgentIndex++
+					return nil
+				}
+
 				var err error
 				decision, err = vg.parseSupervisorDecision(in.Content)
 				if err != nil {
@@ -175,6 +145,32 @@ func (vg *VideoGraph) buildGraph(scheduler *VideoGraphScheduler) error {
 			})
 			if err != nil {
 				return "summary", err
+			}
+
+			if isContinue {
+				var nextAgent AgentType
+				err := compose.ProcessState(ctx, func(ctx context.Context, state *VideoGraphScheduler) error {
+					if state.AgentIndex < len(state.Agents) {
+						nextAgent = state.Agents[state.AgentIndex]
+					}
+					return nil
+				})
+				if err != nil {
+					return "summary", err
+				}
+
+				switch nextAgent {
+				case AgentTypeVideo:
+					return "video_agent", nil
+				case AgentTypeAnalysis:
+					return "analysis_agent", nil
+				case AgentTypeCreation:
+					return "creation_agent", nil
+				case AgentTypeReport:
+					return "report_agent", nil
+				default:
+					return "summary", nil
+				}
 			}
 
 			if decision == nil || len(decision.SelectedAgents) == 0 {
@@ -203,7 +199,7 @@ func (vg *VideoGraph) buildGraph(scheduler *VideoGraphScheduler) error {
 		}))
 
 	addAgentEdge := func(agentNode string) {
-		_ = g.AddEdge(agentNode, "decision")
+		_ = g.AddEdge(agentNode, "supervisor")
 	}
 
 	addAgentEdge("video_agent")

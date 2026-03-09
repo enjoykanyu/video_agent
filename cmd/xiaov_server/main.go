@@ -14,14 +14,14 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"video_agent/internal/biz"
+	"video_agent/internal/agent"
 	"video_agent/internal/handler"
 	pb "video_agent/proto_gen/proto"
 )
 
 type XiaovGRPCServer struct {
 	pb.UnimplementedXiaovServiceServer
-	usecase    *biz.VideoAssistantUsecase
+	usecase    *agent.VideoAssistantUsecase
 	sessionMap map[string]*SessionContext
 }
 
@@ -31,7 +31,7 @@ type SessionContext struct {
 	CreatedAt time.Time
 }
 
-func NewXiaovGRPCServer(uc *biz.VideoAssistantUsecase) *XiaovGRPCServer {
+func NewXiaovGRPCServer(uc *agent.VideoAssistantUsecase) *XiaovGRPCServer {
 	return &XiaovGRPCServer{
 		usecase:    uc,
 		sessionMap: make(map[string]*SessionContext),
@@ -98,7 +98,7 @@ func main() {
 
 	uc := h.GetUsecase()
 
-	lis, err := net.Listen("tcp", ":8080")
+	lis, err := net.Listen("tcp", ":50090")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
@@ -112,7 +112,7 @@ func main() {
 		}
 	}()
 
-	log.Println("Server started on :8080")
+	log.Println("Server started on :50090")
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
