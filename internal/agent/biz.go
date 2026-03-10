@@ -18,6 +18,7 @@ type VideoAssistantUsecase struct {
 	repo         VideoAssistantRepo
 	llm          model.ChatModel
 	mcpManager   *MCPClientManager
+	mcpServers   []MCPServer
 	graph        *VideoGraph
 	ragRetriever RAGDocsRetriever
 }
@@ -26,6 +27,7 @@ func NewVideoAssistantUsecase(
 	repo VideoAssistantRepo,
 	llm model.ChatModel,
 	ragRetriever RAGDocsRetriever,
+	mcpServers []MCPServer,
 ) (*VideoAssistantUsecase, error) {
 	mcpManager := NewMCPClientManager()
 
@@ -33,19 +35,19 @@ func NewVideoAssistantUsecase(
 		repo:         repo,
 		llm:          llm,
 		mcpManager:   mcpManager,
+		mcpServers:   mcpServers,
 		ragRetriever: ragRetriever,
 	}
 
 	if err := usecase.initGraph(); err != nil {
 		log.Printf("[Usecase] init graph warning: %v", err)
-		// 不返回错误，后续可以通过RefreshMCPTools重试
 	}
 
 	return usecase, nil
 }
 
 func (uc *VideoAssistantUsecase) initGraph() error {
-	graph, err := NewVideoGraph(uc.llm, uc.mcpManager)
+	graph, err := NewVideoGraph(uc.llm, uc.mcpManager, uc.mcpServers)
 	if err != nil {
 		return fmt.Errorf("create video graph: %w", err)
 	}

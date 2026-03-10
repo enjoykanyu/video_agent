@@ -91,6 +91,8 @@ func (m *MCPClientManager) RefreshConnections(ctx context.Context, servers []MCP
 }
 
 func (m *MCPClientManager) connectServer(ctx context.Context, server MCPServer) (*MCPClientEntry, error) {
+	log.Printf("[MCP Client] 正在连接服务器: %s (%s)", server.Name, server.URL)
+
 	cli, err := client.NewSSEMCPClient(server.URL)
 	if err != nil {
 		return nil, fmt.Errorf("create SSE client: %w", err)
@@ -99,10 +101,12 @@ func (m *MCPClientManager) connectServer(ctx context.Context, server MCPServer) 
 	connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
+	log.Printf("[MCP Client] 启动 SSE 连接: %s", server.URL)
 	if err := cli.Start(connectCtx); err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("start client: %w", err)
 	}
+	log.Printf("[MCP Client] SSE 连接已启动")
 
 	initRequest := mcp.InitializeRequest{}
 	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
@@ -111,19 +115,23 @@ func (m *MCPClientManager) connectServer(ctx context.Context, server MCPServer) 
 		Version: "1.0.0",
 	}
 
+	log.Printf("[MCP Client] 发送 Initialize 请求...")
 	_, err = cli.Initialize(connectCtx, initRequest)
 	if err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("initialize: %w", err)
 	}
+	log.Printf("[MCP Client] Initialize 成功")
 
 	// 验证连通性
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pingCancel()
+	log.Printf("[MCP Client] 发送 Ping...")
 	if err := cli.Ping(pingCtx); err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("ping: %w", err)
 	}
+	log.Printf("[MCP Client] Ping 成功")
 
 	// 获取工具列表
 	mcpTools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: cli})
@@ -189,6 +197,65 @@ func (m *MCPClientManager) HealthCheck(ctx context.Context) map[string]bool {
 		result[uid] = err == nil
 	}
 	return result
+}
+
+// EnsureConnected 确保指定server的连接有效，失效则重连
+func (m *MCPClientManager) EnsureConnected(ctx context.Context, server MCPServer) error {
+	m.mu.RLock()
+	entry, exists := m.clients[server.UID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("server not found: %s", server.UID)
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	err := entry.Client.(interface{ Ping(context.Context) error }).Ping(checkCtx)
+	cancel()
+
+	if err == nil {
+		return nil
+	}
+
+	log.Printf("[MCP] 连接已失效，准备重连: %s, error: %v", server.Name, err)
+	return m.ReconnectServer(ctx, server)
+}
+
+// ReconnectServer 重新连接指定的MCP Server
+func (m *MCPClientManager) ReconnectServer(ctx context.Context, server MCPServer) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	log.Printf("[MCP] 重新连接服务器: %s (%s)", server.Name, server.URL)
+
+	// 关闭旧连接
+	entry, exists := m.clients[server.UID]
+	if exists && entry.Client != nil {
+		if closer, ok := entry.Client.(interface{ Close() }); ok {
+			closer.Close()
+		}
+	}
+
+	// 重新连接
+	newEntry, err := m.connectServer(ctx, server)
+	if err != nil {
+		return fmt.Errorf("reconnect failed: %w", err)
+	}
+
+	m.clients[server.UID] = newEntry
+
+	// 更新工具映射
+	delete(m.toolMap, server.Name)
+	for _, t := range newEntry.Tools {
+		info, err := t.Info(ctx)
+		if err != nil {
+			continue
+		}
+		m.toolMap[info.Name] = t
+	}
+
+	log.Printf("[MCP] 重新连接成功: %s, tools: %d", server.Name, len(newEntry.Tools))
+	return nil
 }
 
 // Close 关闭所有连接

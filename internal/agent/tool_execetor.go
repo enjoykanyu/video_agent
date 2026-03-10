@@ -14,15 +14,17 @@ import (
 // 核心逻辑：LLM生成 -> 检查tool_calls -> 执行tool -> 将结果回传LLM -> 循环直到无tool_calls
 type ToolExecutor struct {
 	mcpManager *MCPClientManager
-	maxRounds  int // 最大tool调用轮数
+	mcpServers []MCPServer // MCP Server 配置列表
+	maxRounds  int         // 最大tool调用轮数
 }
 
-func NewToolExecutor(mcpManager *MCPClientManager, maxRounds int) *ToolExecutor {
+func NewToolExecutor(mcpManager *MCPClientManager, mcpServers []MCPServer, maxRounds int) *ToolExecutor {
 	if maxRounds <= 0 {
 		maxRounds = 5
 	}
 	return &ToolExecutor{
 		mcpManager: mcpManager,
+		mcpServers: mcpServers,
 		maxRounds:  maxRounds,
 	}
 }
@@ -129,8 +131,11 @@ func (te *ToolExecutor) executeSingleTool(ctx context.Context, toolCall schema.T
 		return "", fmt.Errorf("tool %s does not support invokable call", toolName)
 	}
 
+	log.Printf("[ToolExecutor] 准备调用 MCP 工具: %s", toolName)
+
 	result, err := invokable.InvokableRun(ctx, args)
 	if err != nil {
+		log.Printf("[ToolExecutor] MCP 工具调用失败: %s, error: %v", toolName, err)
 		return "", fmt.Errorf("tool %s execution failed: %w", toolName, err)
 	}
 

@@ -28,8 +28,8 @@ type VideoGraph struct {
 	summaryNode    *SummaryNode
 }
 
-func NewVideoGraph(llm model.ChatModel, mcpManager *MCPClientManager) (*VideoGraph, error) {
-	te := NewToolExecutor(mcpManager, 5)
+func NewVideoGraph(llm model.ChatModel, mcpManager *MCPClientManager, mcpServers []MCPServer) (*VideoGraph, error) {
+	te := NewToolExecutor(mcpManager, mcpServers, 5)
 
 	vg := &VideoGraph{
 		llm:          llm,

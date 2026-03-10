@@ -12,8 +12,30 @@ import (
 	"github.com/google/uuid"
 
 	"video_agent/internal/agent"
-	"video_agent/mcp_server"
 )
+
+func waitForMCPService(url string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("MCP 服务启动超时")
+		case <-ticker.C:
+			resp, err := http.Get(url + "/mcp/health")
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == 200 {
+					return nil
+				}
+			}
+		}
+	}
+}
 
 type XiaovHandler struct {
 	uc *agent.VideoAssistantUsecase
@@ -128,26 +150,24 @@ func InitHandler(ctx context.Context) (*XiaovHandler, error) {
 	var repo agent.VideoAssistantRepo
 	var ragRetriever agent.RAGDocsRetriever
 
-	// 1. 启动 MCP Server (在后台运行)
-	mcpSrv := mcp_server.NewVideoServer("http://localhost:50090")
-	go func() {
-		if err := mcpSrv.Start(":9090"); err != nil {
-			fmt.Printf("⚠️ [Handler] MCP Server 启动失败: %v\n", err)
-		}
-	}()
-	fmt.Println("✅ [Handler] MCP Server 启动中 :9090")
-
-	// 等待 MCP Server 启动
-	time.Sleep(500 * time.Millisecond)
-
-	// 2. 配置 MCP Servers（连接到刚启动的 MCP Server）
+	// MCP Server 由外部单独启动，这里只配置客户端连接
 	mcpServers := []agent.MCPServer{
 		{
 			UID:    "video-mcp-1",
 			Name:   "video-mcp",
-			URL:    "http://localhost:9090/mcp/sse",
+			URL:    "http://localhost:8081/mcp/sse",
 			Status: 1,
 		},
+	}
+
+	// 等待 MCP Server 就绪（如果外部已启动）
+	fmt.Println("⏳ 检查 MCP Server 是否就绪...")
+	mcpURL := "http://localhost:8081"
+	if err := waitForMCPService(mcpURL, 5*time.Second); err != nil {
+		fmt.Printf("⚠️ MCP 服务未就绪，请确保已启动 MCP Server: %v\n", err)
+		fmt.Println("💡 提示: 启动命令 -> go run cmd/mcp_server/main.go")
+	} else {
+		fmt.Println("✅ MCP Server 已就绪")
 	}
 
 	llm, err := newLLM(ctx)
@@ -155,14 +175,16 @@ func InitHandler(ctx context.Context) (*XiaovHandler, error) {
 		return nil, fmt.Errorf("create llm failed: %w", err)
 	}
 
-	uc, err := agent.NewVideoAssistantUsecase(repo, llm, ragRetriever)
+	uc, err := agent.NewVideoAssistantUsecase(repo, llm, ragRetriever, mcpServers)
 	if err != nil {
 		return nil, fmt.Errorf("create usecase failed: %w", err)
 	}
 
+	fmt.Println("🔄 正在连接 MCP Server...")
 	if err := uc.RefreshMCPTools(ctx, mcpServers); err != nil {
 		fmt.Printf("refresh mcp tools failed: %v\n", err)
 	}
+	fmt.Println("✅ MCP Server 连接完成")
 
 	return NewXiaovHandler(uc), nil
 }
