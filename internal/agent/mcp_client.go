@@ -7,11 +7,10 @@ import (
 	"sync"
 	"time"
 
-	mcpp "github.com/cloudwego/eino-ext/components/tool/mcp"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
+
+	"video_agent/mcp_client"
 )
 
 // MCPClientManager 管理所有MCP Server连接
@@ -25,7 +24,7 @@ type MCPClientManager struct {
 
 type MCPClientEntry struct {
 	Server    MCPServer
-	Client    interface{}
+	Client    mcp_client.Client
 	Tools     []tool.BaseTool
 	ToolInfos []*schema.ToolInfo
 	Connected bool
@@ -46,9 +45,7 @@ func (m *MCPClientManager) RefreshConnections(ctx context.Context, servers []MCP
 	// 关闭所有旧连接
 	for _, entry := range m.clients {
 		if entry.Client != nil {
-			if closer, ok := entry.Client.(interface{ Close() }); ok {
-				closer.Close()
-			}
+			entry.Client.Close()
 		}
 	}
 
@@ -75,11 +72,13 @@ func (m *MCPClientManager) RefreshConnections(ctx context.Context, servers []MCP
 		for _, t := range entry.Tools {
 			info, err := t.Info(ctx)
 			if err != nil {
+				log.Printf("[MCP] get tool info failed: %v", err)
 				continue
 			}
 			m.tools = append(m.tools, t)
 			m.toolInfo = append(m.toolInfo, info)
 			m.toolMap[info.Name] = t
+			log.Printf("[MCP] loaded tool: %s", info.Name)
 		}
 
 		log.Printf("[MCP] connected server: %s (%s), tools: %d",
@@ -93,55 +92,37 @@ func (m *MCPClientManager) RefreshConnections(ctx context.Context, servers []MCP
 func (m *MCPClientManager) connectServer(ctx context.Context, server MCPServer) (*MCPClientEntry, error) {
 	log.Printf("[MCP Client] 正在连接服务器: %s (%s)", server.Name, server.URL)
 
-	cli, err := client.NewSSEMCPClient(server.URL)
+	// 解析 Headers
+	headers, err := server.ToServerConfig()
+	if err != nil {
+		log.Printf("[MCP Client] 解析 Headers 警告: %v", err)
+		headers = nil
+	}
+	log.Printf("[MCP Client] Headers: %v", headers)
+
+	// 使用 mcp_client 包创建 SSE 客户端
+	cli, err := mcp_client.NewClient(&mcp_client.Config{
+		Transport: "sse",
+		Server: mcp_client.ServerConfig{
+			URL:     server.URL,
+			Headers: headers,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create SSE client: %w", err)
 	}
 
-	connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	log.Printf("[MCP Client] 启动 SSE 连接: %s", server.URL)
-	if err := cli.Start(connectCtx); err != nil {
-		cli.Close()
-		return nil, fmt.Errorf("start client: %w", err)
-	}
-	log.Printf("[MCP Client] SSE 连接已启动")
-
-	initRequest := mcp.InitializeRequest{}
-	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "video-assistant-client",
-		Version: "1.0.0",
-	}
-
-	log.Printf("[MCP Client] 发送 Initialize 请求...")
-	_, err = cli.Initialize(connectCtx, initRequest)
-	if err != nil {
-		cli.Close()
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
-	log.Printf("[MCP Client] Initialize 成功")
-
-	// 验证连通性
-	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer pingCancel()
-	log.Printf("[MCP Client] 发送 Ping...")
-	if err := cli.Ping(pingCtx); err != nil {
-		cli.Close()
-		return nil, fmt.Errorf("ping: %w", err)
-	}
-	log.Printf("[MCP Client] Ping 成功")
+	log.Printf("[MCP Client] SSE 连接成功: %s", server.URL)
 
 	// 获取工具列表
-	mcpTools, err := mcpp.GetTools(ctx, &mcpp.Config{Cli: cli})
+	tools, err := cli.GetTools(ctx)
 	if err != nil {
 		cli.Close()
 		return nil, fmt.Errorf("get tools: %w", err)
 	}
 
 	var toolInfos []*schema.ToolInfo
-	for _, t := range mcpTools {
+	for _, t := range tools {
 		info, err := t.Info(ctx)
 		if err != nil {
 			continue
@@ -152,7 +133,7 @@ func (m *MCPClientManager) connectServer(ctx context.Context, server MCPServer) 
 	return &MCPClientEntry{
 		Server:    server,
 		Client:    cli,
-		Tools:     mcpTools,
+		Tools:     tools,
 		ToolInfos: toolInfos,
 		Connected: true,
 	}, nil
@@ -184,6 +165,23 @@ func (m *MCPClientManager) GetToolByName(name string) (tool.BaseTool, bool) {
 	return t, ok
 }
 
+// GetToolInfosByNames 根据名称列表获取工具信息
+func (m *MCPClientManager) GetToolInfosByNames(names []string) []*schema.ToolInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []*schema.ToolInfo
+	for _, name := range names {
+		for _, info := range m.toolInfo {
+			if info.Name == name {
+				result = append(result, info)
+				break
+			}
+		}
+	}
+	return result
+}
+
 // HealthCheck 健康检查
 func (m *MCPClientManager) HealthCheck(ctx context.Context) map[string]bool {
 	m.mu.RLock()
@@ -192,7 +190,8 @@ func (m *MCPClientManager) HealthCheck(ctx context.Context) map[string]bool {
 	result := make(map[string]bool)
 	for uid, entry := range m.clients {
 		checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		err := entry.Client.(interface{ Ping(context.Context) error }).Ping(checkCtx)
+		// 尝试获取工具来检查连接状态
+		_, err := entry.Client.GetTools(checkCtx)
 		cancel()
 		result[uid] = err == nil
 	}
@@ -210,7 +209,7 @@ func (m *MCPClientManager) EnsureConnected(ctx context.Context, server MCPServer
 	}
 
 	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	err := entry.Client.(interface{ Ping(context.Context) error }).Ping(checkCtx)
+	_, err := entry.Client.GetTools(checkCtx)
 	cancel()
 
 	if err == nil {
@@ -231,9 +230,7 @@ func (m *MCPClientManager) ReconnectServer(ctx context.Context, server MCPServer
 	// 关闭旧连接
 	entry, exists := m.clients[server.UID]
 	if exists && entry.Client != nil {
-		if closer, ok := entry.Client.(interface{ Close() }); ok {
-			closer.Close()
-		}
+		entry.Client.Close()
 	}
 
 	// 重新连接
@@ -264,10 +261,10 @@ func (m *MCPClientManager) Close() {
 	defer m.mu.Unlock()
 	for _, entry := range m.clients {
 		if entry.Client != nil {
-			if closer, ok := entry.Client.(interface{ Close() }); ok {
-				closer.Close()
-			}
+			entry.Client.Close()
 		}
 	}
 	m.clients = make(map[string]*MCPClientEntry)
+	m.tools = nil
+	m.toolInfo = nil
 }

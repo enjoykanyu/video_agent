@@ -1,74 +1,40 @@
 package handler
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/cloudwego/eino-ext/components/model/ollama"
-	"github.com/cloudwego/eino/components/model"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"video_agent/internal/agent"
 )
 
-func waitForMCPService(url string, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+type ChatRequest struct {
+	Message   string `json:"message" binding:"required"`
+	SessionID string `json:"session_id"`
+	UserID    string `json:"user_id"`
+}
 
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("MCP 服务启动超时")
-		case <-ticker.C:
-			resp, err := http.Get(url + "/mcp/health")
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == 200 {
-					return nil
-				}
-			}
-		}
-	}
+type ChatResponse struct {
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	SessionID string `json:"session_id"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 type XiaovHandler struct {
 	uc *agent.VideoAssistantUsecase
 }
 
-type SessionContext struct {
-	SessionID    string    `json:"session_id"`
-	UserID       string    `json:"user_id"`
-	CreatedAt    time.Time `json:"created_at"`
-	LastActiveAt time.Time `json:"last_active_at"`
-}
-
 func NewXiaovHandler(uc *agent.VideoAssistantUsecase) *XiaovHandler {
-	return &XiaovHandler{uc: uc}
+	return &XiaovHandler{
+		uc: uc,
+	}
 }
 
 func (h *XiaovHandler) GetUsecase() *agent.VideoAssistantUsecase {
 	return h.uc
-}
-
-type ChatRequest struct {
-	UserID    string `json:"user_id" binding:"required"`
-	Message   string `json:"message" binding:"required"`
-	SessionID string `json:"session_id,omitempty"`
-}
-
-type ChatResponse struct {
-	Code      int32  `json:"code"`
-	Message   string `json:"message"`
-	Reply     string `json:"reply"`
-	SessionID string `json:"session_id"`
-	Intent    string `json:"intent"`
-	Timestamp int64  `json:"timestamp"`
 }
 
 func (h *XiaovHandler) Chat(c *gin.Context) {
@@ -86,7 +52,7 @@ func (h *XiaovHandler) Chat(c *gin.Context) {
 		sessionID = uuid.New().String()
 	}
 
-	reply, err := h.uc.Chat(c.Request.Context(), sessionID, req.UserID, req.Message)
+	result, err := h.uc.Chat(c.Request.Context(), sessionID, req.UserID, req.Message)
 	if err != nil {
 		c.JSON(http.StatusOK, ChatResponse{
 			Code:      500,
@@ -98,9 +64,8 @@ func (h *XiaovHandler) Chat(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ChatResponse{
-		Code:      0,
-		Message:   "success",
-		Reply:     reply,
+		Code:      200,
+		Message:   result,
 		SessionID: sessionID,
 		Timestamp: time.Now().UnixMilli(),
 	})
@@ -121,7 +86,7 @@ func (h *XiaovHandler) StreamChat(c *gin.Context) {
 		sessionID = uuid.New().String()
 	}
 
-	stream, err := h.uc.StreamChat(c.Request.Context(), sessionID, req.UserID, req.Message)
+	result, err := h.uc.StreamChat(c.Request.Context(), sessionID, req.UserID, req.Message)
 	if err != nil {
 		c.JSON(http.StatusOK, ChatResponse{
 			Code:      500,
@@ -136,66 +101,6 @@ func (h *XiaovHandler) StreamChat(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	for {
-		resp, err := stream.Recv()
-		if err != nil {
-			break
-		}
-		c.SSEvent("message", resp.Content)
-		c.Writer.Flush()
-	}
-}
-
-func InitHandler(ctx context.Context) (*XiaovHandler, error) {
-	var repo agent.VideoAssistantRepo
-	var ragRetriever agent.RAGDocsRetriever
-
-	// MCP Server 由外部单独启动，这里只配置客户端连接
-	mcpServers := []agent.MCPServer{
-		{
-			UID:    "video-mcp-1",
-			Name:   "video-mcp",
-			URL:    "http://localhost:8081/mcp/sse",
-			Status: 1,
-		},
-	}
-
-	// 等待 MCP Server 就绪（如果外部已启动）
-	fmt.Println("⏳ 检查 MCP Server 是否就绪...")
-	mcpURL := "http://localhost:8081"
-	if err := waitForMCPService(mcpURL, 5*time.Second); err != nil {
-		fmt.Printf("⚠️ MCP 服务未就绪，请确保已启动 MCP Server: %v\n", err)
-		fmt.Println("💡 提示: 启动命令 -> go run cmd/mcp_server/main.go")
-	} else {
-		fmt.Println("✅ MCP Server 已就绪")
-	}
-
-	llm, err := newLLM(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create llm failed: %w", err)
-	}
-
-	uc, err := agent.NewVideoAssistantUsecase(repo, llm, ragRetriever, mcpServers)
-	if err != nil {
-		return nil, fmt.Errorf("create usecase failed: %w", err)
-	}
-
-	fmt.Println("🔄 正在连接 MCP Server...")
-	if err := uc.RefreshMCPTools(ctx, mcpServers); err != nil {
-		fmt.Printf("refresh mcp tools failed: %v\n", err)
-	}
-	fmt.Println("✅ MCP Server 连接完成")
-
-	return NewXiaovHandler(uc), nil
-}
-
-func newLLM(ctx context.Context) (model.ChatModel, error) {
-	llm, err := ollama.NewChatModel(ctx, &ollama.ChatModelConfig{
-		BaseURL: "http://localhost:11434",
-		Model:   "qwen3:0.6b",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create ollama model failed: %w", err)
-	}
-	return llm, nil
+	c.SSEvent("message", result)
+	c.Writer.Flush()
 }

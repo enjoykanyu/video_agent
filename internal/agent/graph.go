@@ -4,46 +4,55 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/prompt"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+
+	"video_agent/mcp"
 )
 
-// VideoGraph eino图编排
-type VideoGraph struct {
-	runner       compose.Runnable[[]*schema.Message, *schema.Message]
-	llm          model.ChatModel
-	mcpManager   *MCPClientManager
-	toolExecutor *ToolExecutor
+const (
+	NodeIntentModel = "intent_model"
+	NodeTransList   = "trans_list"
+	NodeRAG         = "rag_retrieval"
+	NodeToToolCall  = "to_tool_call"
+	NodeMCPInput    = "mcp_input"
+	NodeMCP         = "mcp"
+)
 
-	// 所有Agent节点
-	supervisor     *SupervisorNode
-	videoAgent     *VideoAgentNode
-	analysisAgent  *AnalysisAgentNode
-	creationAgent  *CreationAgentNode
-	reportAgent    *ReportAgentNode
-	profileAgent   *ProfileAgentNode
-	recommendAgent *RecommendAgentNode
-	summaryNode    *SummaryNode
+type VideoGraph struct {
+	runner      compose.Runnable[[]*schema.Message, []*schema.Message]
+	llm         model.ChatModel
+	mcpTools    []tool.BaseTool
+	reportAgent *ReportAgentNode
 }
 
-func NewVideoGraph(llm model.ChatModel, mcpManager *MCPClientManager, mcpServers []MCPServer) (*VideoGraph, error) {
-	te := NewToolExecutor(mcpManager, mcpServers, 5)
+func NewVideoGraph(llm model.ChatModel, mcpServers []MCPServer) (*VideoGraph, error) {
+	ctx := context.Background()
+
+	var mcpTools []tool.BaseTool
+	mcpTools, err := mcp.GetMCPTool(ctx)
+	if err != nil {
+		log.Printf("[Graph] warning: get MCP tools failed: %v (continuing without MCP)", err)
+		mcpTools = nil
+	}
+
+	if llm == nil {
+		return nil, fmt.Errorf("llm is required")
+	}
+
+	reportTools := selectToolsForAgent(mcpTools, AgentTypeReport)
+	te := NewToolExecutor(reportTools, llm)
+	reportAgent := NewReportAgentNode(llm, te)
 
 	vg := &VideoGraph{
-		llm:          llm,
-		mcpManager:   mcpManager,
-		toolExecutor: te,
-
-		supervisor:     NewSupervisorNode(llm),
-		videoAgent:     NewVideoAgentNode(llm, te),
-		analysisAgent:  NewAnalysisAgentNode(llm, te),
-		creationAgent:  NewCreationAgentNode(llm, te),
-		reportAgent:    NewReportAgentNode(llm, te),
-		profileAgent:   NewProfileAgentNode(llm, te),
-		recommendAgent: NewRecommendAgentNode(llm, te),
-		summaryNode:    NewSummaryNode(llm),
+		llm:         llm,
+		mcpTools:    mcpTools,
+		reportAgent: reportAgent,
 	}
 
 	if err := vg.buildGraph(); err != nil {
@@ -53,26 +62,64 @@ func NewVideoGraph(llm model.ChatModel, mcpManager *MCPClientManager, mcpServers
 	return vg, nil
 }
 
+func selectToolsForAgent(allTools []tool.BaseTool, agentType AgentType) []tool.BaseTool {
+	if len(allTools) == 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	var filtered []tool.BaseTool
+
+	for _, t := range allTools {
+		info, _ := t.Info(ctx)
+		toolName := info.Name
+
+		switch agentType {
+		case AgentTypeReport:
+			if strings.Contains(toolName, "video") || strings.Contains(toolName, "user") ||
+				strings.Contains(toolName, "analysis") || strings.Contains(toolName, "data") {
+				filtered = append(filtered, t)
+			}
+		case AgentTypeCreation:
+			if strings.Contains(toolName, "create") || strings.Contains(toolName, "upload") ||
+				strings.Contains(toolName, "publish") {
+				filtered = append(filtered, t)
+			}
+		case AgentTypeAnalysis:
+			if strings.Contains(toolName, "video") || strings.Contains(toolName, "user") ||
+				strings.Contains(toolName, "analytics") || strings.Contains(toolName, "stat") {
+				filtered = append(filtered, t)
+			}
+		case AgentTypeProfile:
+			if strings.Contains(toolName, "user") || strings.Contains(toolName, "profile") {
+				filtered = append(filtered, t)
+			}
+		case AgentTypeRecommend:
+			if strings.Contains(toolName, "video") || strings.Contains(toolName, "recommend") {
+				filtered = append(filtered, t)
+			}
+		default:
+			filtered = append(filtered, t)
+		}
+	}
+
+	log.Printf("[Graph] agent %s selected %d tools", agentType, len(filtered))
+	return filtered
+}
+
 func (vg *VideoGraph) buildGraph() error {
 	ctx := context.Background()
 
-	// 创建带状态的图
-	// 输入: []*schema.Message, 输出: *schema.Message, 状态: *GraphState
-	g := compose.NewGraph[[]*schema.Message, *schema.Message](
+	g := compose.NewGraph[[]*schema.Message, []*schema.Message](
 		compose.WithGenLocalState(func(ctx context.Context) *GraphState {
 			return NewGraphState("", "", "")
 		}),
 	)
 
-	// ==================== 注册节点 ====================
-
-	// 1. Supervisor节点 - Lambda节点，输入消息，输出消息
-	err := g.AddLambdaNode("supervisor", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+	_ = g.AddLambdaNode(NodeIntentModel, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
 		var state *GraphState
-		// 从状态中获取GraphState
 		err := compose.ProcessState(ctx, func(ctx context.Context, s *GraphState) error {
 			state = s
-			// 首次进入：将用户输入写入state
 			if state.OriginalQuery == "" && len(input) > 0 {
 				state.OriginalQuery = input[len(input)-1].Content
 				state.Messages = input
@@ -80,92 +127,39 @@ func (vg *VideoGraph) buildGraph() error {
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("process state: %w", err)
+			return nil, err
 		}
 
-		plan, err := vg.supervisor.Execute(ctx, state)
+		intentTemp := prompt.FromMessages(schema.FString,
+			schema.SystemMessage("你是一个意图识别专家。请严格按规则判断用户意图：\n规则：\n- 如果用户询问视频数据分析、视频统计、视频报表、生成报告、分析某个视频的任何内容，必须回答 'Report'\n- 如果用户只是闲聊、问候、普通问答，回答 'Chat'\n注意：只要涉及\"分析视频\"、\"视频数据\"、\"视频统计\"、\"报表\"等关键词，都必须回答 'Report'"),
+			schema.UserMessage("{query}"),
+		)
+
+		output, err := intentTemp.Format(ctx, map[string]any{
+			"query": state.OriginalQuery,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("supervisor execute: %w", err)
+			return nil, err
 		}
 
-		state.SetPlan(plan)
-
-		// 将plan信息作为消息传递给branch
-		return []*schema.Message{
-			{Role: schema.Assistant, Content: fmt.Sprintf("plan:%d", len(plan.ExecutionOrder))},
-		}, nil
-	}), compose.WithNodeName("supervisor"))
-	if err != nil {
-		return fmt.Errorf("add supervisor node: %w", err)
-	}
-
-	// 2. 注册Agent执行节点 - 每个Agent作为Lambda节点
-	agentNodes := map[string]Agent{
-		AgentTypeVideo.NodeName():     vg.videoAgent,
-		AgentTypeAnalysis.NodeName():  vg.analysisAgent,
-		AgentTypeCreation.NodeName():  vg.creationAgent,
-		AgentTypeReport.NodeName():    vg.reportAgent,
-		AgentTypeProfile.NodeName():   vg.profileAgent,
-		AgentTypeRecommend.NodeName(): vg.recommendAgent,
-	}
-
-	for nodeName, agent := range agentNodes {
-		agentCopy := agent // 闭包捕获
-		err := g.AddLambdaNode(nodeName, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			// 执行Agent
-			result, execErr := agentCopy.Execute(ctx, state)
-			if execErr != nil {
-				log.Printf("[%s] execution error: %v", agentCopy.Name(), execErr)
-				result = &AgentResult{
-					AgentType: agentCopy.Name(),
-					Content:   fmt.Sprintf("执行出错: %v", execErr),
-					Error:     execErr.Error(),
-				}
-			}
-
-			// 保存结果到state
-			state.SetAgentResult(agentCopy.Name(), result)
-			state.AppendMessage(&schema.Message{
-				Role:    schema.Assistant,
-				Content: result.Content,
-			})
-
-			// 路由决策
-			nextAgent, routeErr := agentCopy.Route(ctx, state, result)
-			if routeErr != nil {
-				nextAgent = AgentTypeSummary
-			}
-			result.NextAgent = nextAgent
-
-			return []*schema.Message{
-				{Role: schema.Assistant, Content: string(nextAgent)},
-			}, nil
-		}), compose.WithNodeName(nodeName))
+		resp, err := vg.llm.Generate(ctx, output)
 		if err != nil {
-			return fmt.Errorf("add agent node %s: %w", nodeName, err)
+			return nil, err
 		}
-	}
 
-	// 3. 路由器节点 - 根据Agent的路由决策将消息路由到下一个节点
-	err = g.AddLambdaNode("router", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-		// router直接传递，路由逻辑在branch里
+		log.Printf("[Graph] intent decision: %s", resp.Content)
+
+		return []*schema.Message{resp}, nil
+	}))
+
+	_ = g.AddLambdaNode(NodeTransList, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+		if len(input) == 0 {
+			return input, nil
+		}
 		return input, nil
-	}), compose.WithNodeName("router"))
-	if err != nil {
-		return fmt.Errorf("add router node: %w", err)
-	}
+	}))
 
-	// 4. Summary节点
-	err = g.AddLambdaNode("summary", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) (*schema.Message, error) {
+	_ = g.AddLambdaNode(NodeRAG, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
 		var state *GraphState
 		err := compose.ProcessState(ctx, func(ctx context.Context, s *GraphState) error {
 			state = s
@@ -175,160 +169,162 @@ func (vg *VideoGraph) buildGraph() error {
 			return nil, err
 		}
 
-		content, err := vg.summaryNode.Execute(ctx, state)
-		if err != nil {
-			return &schema.Message{Role: schema.Assistant, Content: "处理完成，但整合结果时出现问题。"}, nil
+		log.Printf("[Graph] RAG retrieval for query: %s", state.OriginalQuery)
+
+		state.SetRAGDocuments([]RAGDocument{})
+		state.FinalAnswer = "RAG检索完成"
+
+		return []*schema.Message{
+			schema.AssistantMessage("RAG检索完成", nil),
+		}, nil
+	}))
+
+	_ = g.AddLambdaNode(NodeToToolCall, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+		if len(input) == 0 {
+			return input, nil
+		}
+		msg := input[len(input)-1]
+
+		hasToolCall := len(msg.ToolCalls) > 0
+		if !hasToolCall {
+			log.Printf("[Graph] no tool call in message, skip MCP")
+			return input, nil
 		}
 
-		state.FinalAnswer = content
-		return &schema.Message{Role: schema.Assistant, Content: content}, nil
-	}), compose.WithNodeName("summary"))
-	if err != nil {
-		return fmt.Errorf("add summary node: %w", err)
-	}
+		toolCallMsg, err := mcp.MsgToToolCall(ctx, msg)
+		if err != nil {
+			return nil, err
+		}
+		return []*schema.Message{toolCallMsg}, nil
+	}))
 
-	// ==================== 连接边 ====================
-
-	// START -> supervisor
-	if err := g.AddEdge(compose.START, "supervisor"); err != nil {
-		return fmt.Errorf("add edge START->supervisor: %w", err)
-	}
-
-	// supervisor -> branch (根据plan路由到第一个Agent或直接到summary)
-	supervisorBranch := compose.NewGraphBranch(
-		func(ctx context.Context, msgs []*schema.Message) (string, error) {
+	if vg.reportAgent != nil {
+		_ = g.AddLambdaNode("report_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
 			var state *GraphState
 			err := compose.ProcessState(ctx, func(ctx context.Context, s *GraphState) error {
 				state = s
 				return nil
 			})
 			if err != nil {
-				return "summary", nil
+				return nil, err
 			}
 
-			nextAgent, hasMore := state.GetNextAgent()
-			if !hasMore || state.Plan == nil || len(state.Plan.ExecutionOrder) == 0 {
-				return "summary", nil
+			log.Printf("[Graph] executing report agent for query: %s", state.OriginalQuery)
+
+			result, err := vg.reportAgent.Execute(ctx, state)
+			if err != nil {
+				log.Printf("[Graph] report agent error: %v", err)
+				return []*schema.Message{
+					schema.AssistantMessage(fmt.Sprintf("执行失败: %v", err), nil),
+				}, nil
 			}
 
-			nodeName := nextAgent.NodeName()
-			log.Printf("[Graph] supervisor -> %s", nodeName)
-			return nodeName, nil
-		},
-		map[string]bool{
-			AgentTypeVideo.NodeName():     true,
-			AgentTypeAnalysis.NodeName():  true,
-			AgentTypeCreation.NodeName():  true,
-			AgentTypeReport.NodeName():    true,
-			AgentTypeProfile.NodeName():   true,
-			AgentTypeRecommend.NodeName(): true,
-			"summary":                     true,
-		},
-	)
-	if err := g.AddBranch("supervisor", supervisorBranch); err != nil {
-		return fmt.Errorf("add supervisor branch: %w", err)
+			state.SetAgentResult(AgentTypeReport, result)
+			state.FinalAnswer = result.Content
+
+			nextAgent, err := vg.reportAgent.Route(ctx, state, result)
+			log.Printf("[Graph] report agent route result: %s", nextAgent)
+
+			msgs := make([]*schema.Message, 0)
+			if len(result.ToolCalls) > 0 {
+				msgs = append(msgs, &schema.Message{
+					Role:      schema.Assistant,
+					Content:   result.Content,
+					ToolCalls: result.ToolCalls,
+				})
+			} else {
+				msgs = append(msgs, schema.AssistantMessage(result.Content, nil))
+			}
+			return msgs, nil
+		}))
 	}
 
-	// 每个Agent -> router
-	for nodeName := range agentNodes {
-		if err := g.AddEdge(nodeName, "router"); err != nil {
-			return fmt.Errorf("add edge %s->router: %w", nodeName, err)
+	if len(vg.mcpTools) > 0 {
+		_ = g.AddLambdaNode(NodeMCPInput, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) (*schema.Message, error) {
+			if len(input) == 0 {
+				return nil, nil
+			}
+			msg := input[len(input)-1]
+			if len(msg.ToolCalls) == 0 {
+				return nil, nil
+			}
+			return msg, nil
+		}))
+
+		mcpNode, err := compose.NewToolNode(ctx, &compose.ToolsNodeConfig{
+			Tools: vg.mcpTools,
+		})
+		if err != nil {
+			log.Printf("[Graph] warning: create MCP tool node failed: %v", err)
+		} else {
+			err = g.AddToolsNode(NodeMCP, mcpNode)
+			if err != nil {
+				log.Printf("[Graph] warning: add MCP tool node failed: %v", err)
+			} else {
+				log.Printf("[Graph] MCP tool node registered, tools count: %d", len(vg.mcpTools))
+			}
 		}
 	}
 
-	// router -> branch (根据Agent的路由决策到下一个Agent或summary)
-	routerBranch := compose.NewGraphBranch(
+	_ = g.AddEdge(compose.START, NodeIntentModel)
+	_ = g.AddEdge(NodeIntentModel, NodeTransList)
+
+	_ = g.AddBranch(NodeTransList, compose.NewGraphBranch(
 		func(ctx context.Context, msgs []*schema.Message) (string, error) {
 			if len(msgs) == 0 {
-				return "summary", nil
+				return compose.END, nil
 			}
-
-			// 消息内容包含下一个Agent的类型
-			nextAgentStr := msgs[len(msgs)-1].Content
-			nextAgent := AgentType(nextAgentStr)
-
-			switch nextAgent {
-			case AgentTypeVideo:
-				return AgentTypeVideo.NodeName(), nil
-			case AgentTypeAnalysis:
-				return AgentTypeAnalysis.NodeName(), nil
-			case AgentTypeCreation:
-				return AgentTypeCreation.NodeName(), nil
-			case AgentTypeReport:
-				return AgentTypeReport.NodeName(), nil
-			case AgentTypeProfile:
-				return AgentTypeProfile.NodeName(), nil
-			case AgentTypeRecommend:
-				return AgentTypeRecommend.NodeName(), nil
-			case AgentTypeSummary, AgentTypeEnd:
-				return "summary", nil
-			default:
-				return "summary", nil
+			content := strings.ToUpper(msgs[len(msgs)-1].Content)
+			if strings.Contains(content, "REPORT") {
+				return "report_agent", nil
 			}
+			return NodeRAG, nil
 		},
 		map[string]bool{
-			AgentTypeVideo.NodeName():     true,
-			AgentTypeAnalysis.NodeName():  true,
-			AgentTypeCreation.NodeName():  true,
-			AgentTypeReport.NodeName():    true,
-			AgentTypeProfile.NodeName():   true,
-			AgentTypeRecommend.NodeName(): true,
-			"summary":                     true,
+			"report_agent": true,
+			NodeRAG:        true,
 		},
-	)
-	if err := g.AddBranch("router", routerBranch); err != nil {
-		return fmt.Errorf("add router branch: %w", err)
+	))
+
+	_ = g.AddEdge("report_agent", NodeToToolCall)
+	_ = g.AddEdge(NodeRAG, compose.END)
+
+	if len(vg.mcpTools) > 0 {
+		_ = g.AddBranch(NodeToToolCall, compose.NewGraphBranch(
+			func(ctx context.Context, msgs []*schema.Message) (string, error) {
+				if len(msgs) == 0 {
+					return compose.END, nil
+				}
+				msg := msgs[len(msgs)-1]
+				if len(msg.ToolCalls) == 0 {
+					return compose.END, nil
+				}
+				return NodeMCPInput, nil
+			},
+			map[string]bool{
+				NodeMCPInput: true,
+				compose.END:  true,
+			},
+		))
+
+		_ = g.AddEdge(NodeMCPInput, NodeMCP)
+		_ = g.AddEdge(NodeMCP, compose.END)
+	} else {
+		_ = g.AddEdge(NodeToToolCall, compose.END)
 	}
 
-	// summary -> END
-	if err := g.AddEdge("summary", compose.END); err != nil {
-		return fmt.Errorf("add edge summary->END: %w", err)
-	}
-
-	// ==================== 编译图 ====================
-
-	runner, err := g.Compile(ctx)
+	compiled, err := g.Compile(ctx)
 	if err != nil {
 		return fmt.Errorf("compile graph: %w", err)
 	}
 
-	vg.runner = runner
-	log.Printf("[Graph] compiled successfully")
-
+	vg.runner = compiled
 	return nil
 }
 
-// Chat 同步调用
-func (vg *VideoGraph) Chat(ctx context.Context, message string, sessionID, userID string) (string, error) {
+func (vg *VideoGraph) Run(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error) {
 	if vg.runner == nil {
-		return "", fmt.Errorf("graph not compiled")
+		return nil, fmt.Errorf("graph not initialized")
 	}
-
-	input := []*schema.Message{
-		schema.UserMessage(message),
-	}
-
-	result, err := vg.runner.Invoke(ctx, input)
-	if err != nil {
-		return "", fmt.Errorf("graph invoke: %w", err)
-	}
-
-	if result == nil {
-		return "处理完成", nil
-	}
-
-	return result.Content, nil
-}
-
-// StreamChat 流式调用
-func (vg *VideoGraph) StreamChat(ctx context.Context, message string, sessionID, userID string) (*schema.StreamReader[*schema.Message], error) {
-	if vg.runner == nil {
-		return nil, fmt.Errorf("graph not compiled")
-	}
-
-	input := []*schema.Message{
-		schema.UserMessage(message),
-	}
-
-	return vg.runner.Stream(ctx, input)
+	return vg.runner.Invoke(ctx, messages)
 }

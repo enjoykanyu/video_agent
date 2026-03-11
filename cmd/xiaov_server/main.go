@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -9,32 +10,86 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cloudwego/eino-ext/components/model/ollama"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"video_agent/internal/agent"
-	"video_agent/internal/handler"
+	"video_agent/mcp"
 	pb "video_agent/proto_gen/proto"
 )
 
-type XiaovGRPCServer struct {
-	pb.UnimplementedXiaovServiceServer
-	usecase    *agent.VideoAssistantUsecase
-	sessionMap map[string]*SessionContext
+func main() {
+	ctx := context.Background()
+
+	mcpConfig := &mcp.MCPConfig{
+		Transport: "sse",
+		Server: mcp.ServerConfig{
+			URL: "http://localhost:8081/mcp/sse",
+		},
+	}
+
+	fmt.Println("⏳ 初始化 MCP 工具...")
+	if err := mcp.InitMCP(ctx, mcpConfig); err != nil {
+		log.Printf("init MCP warning: %v", err)
+	}
+
+	fmt.Println("⏳ 初始化 Ollama 大模型...")
+	llm, err := getChatModel(ctx)
+	if err != nil {
+		log.Fatalf("get chat model failed: %v", err)
+	}
+
+	mcpServers := []agent.MCPServer{
+		{
+			UID:    "video-mcp-1",
+			Name:   "video-mcp",
+			URL:    "http://localhost:8081/mcp/sse",
+			Status: 1,
+		},
+	}
+
+	fmt.Println("⏳ 初始化 Agent...")
+	uc, err := agent.NewVideoAssistantUsecase(nil, llm, nil, mcpServers)
+	if err != nil {
+		log.Fatalf("create usecase failed: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", ":50090")
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterXiaovServiceServer(grpcServer, NewXiaovGRPCServer(uc))
+
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("failed to serve: %v", err)
+		}
+	}()
+
+	log.Println("Server started on :50090")
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+	grpcServer.GracefulStop()
 }
 
-type SessionContext struct {
-	SessionID string
-	UserID    string
-	CreatedAt time.Time
+type XiaovGRPCServer struct {
+	pb.UnimplementedXiaovServiceServer
+	usecase *agent.VideoAssistantUsecase
 }
 
 func NewXiaovGRPCServer(uc *agent.VideoAssistantUsecase) *XiaovGRPCServer {
 	return &XiaovGRPCServer{
-		usecase:    uc,
-		sessionMap: make(map[string]*SessionContext),
+		usecase: uc,
 	}
 }
 
@@ -64,60 +119,27 @@ func (s *XiaovGRPCServer) ChatStream(req *pb.ChatRequest, stream pb.XiaovService
 		sessionID = uuid.New().String()
 	}
 
-	streamResult, err := s.usecase.StreamChat(stream.Context(), sessionID, req.UserId, req.Message)
+	result, err := s.usecase.StreamChat(stream.Context(), sessionID, req.UserId, req.Message)
 	if err != nil {
 		return status.Errorf(codes.Internal, "stream chat failed: %v", err)
 	}
 
-	for {
-		resp, err := streamResult.Recv()
-		if err != nil {
-			break
-		}
-		if err := stream.Send(&pb.ChatStreamResponse{
-			Payload: &pb.ChatStreamResponse_Content{
-				Content: &pb.StreamContent{
-					Content: resp.Content,
-				},
+	return stream.Send(&pb.ChatStreamResponse{
+		Payload: &pb.ChatStreamResponse_Content{
+			Content: &pb.StreamContent{
+				Content: result,
 			},
-		}); err != nil {
-			break
-		}
-	}
-
-	return nil
+		},
+	})
 }
 
-func main() {
-	ctx := context.Background()
-
-	h, err := handler.InitHandler(ctx)
+func getChatModel(ctx context.Context) (model.ChatModel, error) {
+	llm, err := ollama.NewChatModel(ctx, &ollama.ChatModelConfig{
+		BaseURL: "http://localhost:11434",
+		Model:   "qwen3:0.6b",
+	})
 	if err != nil {
-		log.Fatalf("init handler failed: %v", err)
+		return nil, fmt.Errorf("create ollama chat model failed: %w", err)
 	}
-
-	uc := h.GetUsecase()
-
-	lis, err := net.Listen("tcp", ":50090")
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
-
-	grpcServer := grpc.NewServer()
-	pb.RegisterXiaovServiceServer(grpcServer, NewXiaovGRPCServer(uc))
-
-	go func() {
-		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
-		}
-	}()
-
-	log.Println("Server started on :50090")
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Shutting down server...")
-	grpcServer.GracefulStop()
+	return llm, nil
 }

@@ -19,7 +19,7 @@ func NewSupervisorNode(llm model.ChatModel) *SupervisorNode {
 	return &SupervisorNode{llm: llm}
 }
 
-// Execute supervisor不需要tool，直接调用LLM做意图识别
+// Execute supervisor调用LLM做意图识别和分支决策
 func (s *SupervisorNode) Execute(ctx context.Context, state *GraphState) (*SupervisorPlan, error) {
 	messages := []*schema.Message{
 		schema.SystemMessage(SupervisorPrompt),
@@ -44,8 +44,14 @@ func (s *SupervisorNode) Execute(ctx context.Context, state *GraphState) (*Super
 		return s.fallbackPlan(state.OriginalQuery), nil
 	}
 
-	log.Printf("[Supervisor] plan: agents=%v, order=%v, reasoning=%s",
-		plan.SelectedAgents, plan.ExecutionOrder, plan.Reasoning)
+	// 如果解析成功但返回空agents且不是简单问候，使用fallback
+	if len(plan.SelectedAgents) == 0 && !s.isGreeting(state.OriginalQuery) {
+		log.Printf("[Supervisor] plan is empty but not greeting, using fallback")
+		return s.fallbackPlan(state.OriginalQuery), nil
+	}
+
+	log.Printf("[Supervisor] plan: branch=%s, agents=%v, order=%v, reasoning=%s",
+		plan.Branch, plan.SelectedAgents, plan.ExecutionOrder, plan.Reasoning)
 
 	return plan, nil
 }
@@ -54,10 +60,11 @@ func (s *SupervisorNode) parsePlan(content string) (*SupervisorPlan, error) {
 	content = extractJSON(content)
 
 	var raw struct {
-		TaskAnalysis   string   `json:"task_analysis"`
-		SelectedAgents []string `json:"selected_agents"`
-		ExecutionOrder []string `json:"execution_order"`
-		Reasoning      string   `json:"reasoning"`
+		TaskAnalysis   string          `json:"task_analysis"`
+		SelectedAgents []string        `json:"selected_agents"`
+		ExecutionOrder []string        `json:"execution_order"`
+		Branch         string          `json:"branch"`
+		Reasoning      string          `json:"reasoning"`
 	}
 
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
@@ -69,12 +76,17 @@ func (s *SupervisorNode) parsePlan(content string) (*SupervisorPlan, error) {
 		Reasoning:    raw.Reasoning,
 	}
 
+	// 解析Branch
+	plan.Branch = parseBranch(raw.Branch)
+
+	// 解析SelectedAgents
 	for _, a := range raw.SelectedAgents {
 		if at := parseAgentType(a); at != "" {
 			plan.SelectedAgents = append(plan.SelectedAgents, at)
 		}
 	}
 
+	// 解析ExecutionOrder
 	for _, a := range raw.ExecutionOrder {
 		if at := parseAgentType(a); at != "" {
 			plan.ExecutionOrder = append(plan.ExecutionOrder, at)
@@ -87,13 +99,67 @@ func (s *SupervisorNode) parsePlan(content string) (*SupervisorPlan, error) {
 		copy(plan.ExecutionOrder, plan.SelectedAgents)
 	}
 
+	// 如果branch为空，根据agents推断默认分支
+	if plan.Branch == "" {
+		if len(plan.SelectedAgents) == 0 {
+			plan.Branch = BranchDirectLLM
+		} else {
+			plan.Branch = BranchAgent
+		}
+	}
+
 	return plan, nil
+}
+
+func parseBranch(branchStr string) ExecutionBranch {
+	switch strings.TrimSpace(strings.ToLower(branchStr)) {
+	case "rag":
+		return BranchRAG
+	case "direct_llm", "direct", "llm":
+		return BranchDirectLLM
+	case "agent", "agents", "workflow":
+		return BranchAgent
+	default:
+		return BranchAgent // 默认使用Agent分支
+	}
+}
+
+func (s *SupervisorNode) isGreeting(message string) bool {
+	lower := strings.ToLower(message)
+	greetingKeywords := []string{"你好", "在吗", "谢谢", "你好啊", "嘿", "嗨", "hello", "hi", "morning", "evening"}
+	for _, kw := range greetingKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SupervisorNode) fallbackPlan(message string) *SupervisorPlan {
 	lower := strings.ToLower(message)
 
 	var agents []AgentType
+	var branch ExecutionBranch = BranchAgent
+
+	// 检查是否是简单问候
+	if s.isGreeting(message) {
+		return &SupervisorPlan{
+			TaskAnalysis:   "用户问候，直接LLM回答",
+			SelectedAgents: []AgentType{},
+			ExecutionOrder: []AgentType{},
+			Branch:         BranchDirectLLM,
+			Reasoning:      "检测到问候语，使用直接LLM分支",
+		}
+	}
+
+	// 检查是否需要RAG
+	ragKeywords := []string{"资料", "文档", "知识", "参考", "查找"}
+	for _, kw := range ragKeywords {
+		if strings.Contains(lower, kw) {
+			branch = BranchRAG
+			break
+		}
+	}
 
 	type pattern struct {
 		agentType AgentType
@@ -125,6 +191,7 @@ func (s *SupervisorNode) fallbackPlan(message string) *SupervisorPlan {
 		TaskAnalysis:   "基于关键词匹配的默认决策",
 		SelectedAgents: agents,
 		ExecutionOrder: agents,
+		Branch:         branch,
 		Reasoning:      "LLM解析失败，使用关键词匹配回退策略",
 	}
 }
