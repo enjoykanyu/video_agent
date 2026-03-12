@@ -17,7 +17,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"video_agent/internal/agent"
+	agent_biz "video_agent/internal/agent/biz"
+	"video_agent/internal/agent/types"
 	"video_agent/mcp"
 	pb "video_agent/proto_gen/proto"
 )
@@ -43,7 +44,7 @@ func main() {
 		log.Fatalf("get chat model failed: %v", err)
 	}
 
-	mcpServers := []agent.MCPServer{
+	mcpServers := []types.MCPServer{
 		{
 			UID:    "video-mcp-1",
 			Name:   "video-mcp",
@@ -53,7 +54,7 @@ func main() {
 	}
 
 	fmt.Println("⏳ 初始化 Agent...")
-	uc, err := agent.NewVideoAssistantUsecase(nil, llm, nil, mcpServers)
+	uc, err := agent_biz.NewVideoAssistantUsecase(nil, llm, nil, mcpServers)
 	if err != nil {
 		log.Fatalf("create usecase failed: %v", err)
 	}
@@ -84,10 +85,10 @@ func main() {
 
 type XiaovGRPCServer struct {
 	pb.UnimplementedXiaovServiceServer
-	usecase *agent.VideoAssistantUsecase
+	usecase *agent_biz.VideoAssistantUsecase
 }
 
-func NewXiaovGRPCServer(uc *agent.VideoAssistantUsecase) *XiaovGRPCServer {
+func NewXiaovGRPCServer(uc *agent_biz.VideoAssistantUsecase) *XiaovGRPCServer {
 	return &XiaovGRPCServer{
 		usecase: uc,
 	}
