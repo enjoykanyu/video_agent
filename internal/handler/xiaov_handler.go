@@ -3,11 +3,10 @@ package handler
 import (
 	"net/http"
 	"time"
+	agent_biz "video_agent/internal/agent/biz"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-
-	"video_agent/internal/agent"
 )
 
 type ChatRequest struct {
@@ -24,16 +23,16 @@ type ChatResponse struct {
 }
 
 type XiaovHandler struct {
-	uc *agent.VideoAssistantUsecase
+	uc *agent_biz.VideoAssistantUsecase
 }
 
-func NewXiaovHandler(uc *agent.VideoAssistantUsecase) *XiaovHandler {
+func NewXiaovHandler(uc *agent_biz.VideoAssistantUsecase) *XiaovHandler {
 	return &XiaovHandler{
 		uc: uc,
 	}
 }
 
-func (h *XiaovHandler) GetUsecase() *agent.VideoAssistantUsecase {
+func (h *XiaovHandler) GetUsecase() *agent_biz.VideoAssistantUsecase {
 	return h.uc
 }
 
