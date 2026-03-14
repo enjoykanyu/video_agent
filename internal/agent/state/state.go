@@ -46,6 +46,9 @@ type GraphState struct {
 	RAGDocuments []types.RAGDocument
 	RAGContext   string
 
+	// RAGSelection RAG知识库选择结果
+	RAGSelection interface{}
+
 	FinalAnswer string
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"video_agent/internal/agent/agents/base"
 	"video_agent/internal/agent/agents/creative_analysis"
+	"video_agent/internal/agent/agents/rag_selector"
 	report "video_agent/internal/agent/agents/report"
 	"video_agent/internal/agent/agents/summary"
 	"video_agent/internal/agent/state"
@@ -38,6 +39,7 @@ type VideoGraph struct {
 	mcpTools              []tool.BaseTool
 	reportAgent           *report.ReportAgentNode
 	creativeAnalysisAgent *creative_analysis.CreativeAnalysisAgentNode
+	ragSelectorAgent      *rag_selector.RAGSelectorAgentNode
 	summaryNode           *summary.SummaryNode
 }
 
@@ -63,6 +65,8 @@ func NewVideoGraph(llm model.ChatModel, mcpServers []types.MCPServer) (*VideoGra
 	creativeAnalysisTE := base.NewToolExecutor(creativeAnalysisTools, llm)
 	creativeAnalysisAgent := creative_analysis.NewCreativeAnalysisAgentNode(llm, creativeAnalysisTE)
 
+	ragSelectorAgent := rag_selector.NewRAGSelectorAgentNode(llm, nil, nil)
+
 	summaryNode := summary.NewSummaryNode(llm)
 
 	vg := &VideoGraph{
@@ -70,6 +74,7 @@ func NewVideoGraph(llm model.ChatModel, mcpServers []types.MCPServer) (*VideoGra
 		mcpTools:              mcpTools,
 		reportAgent:           reportAgent,
 		creativeAnalysisAgent: creativeAnalysisAgent,
+		ragSelectorAgent:      ragSelectorAgent,
 		summaryNode:           summaryNode,
 	}
 
@@ -119,6 +124,14 @@ func selectToolsForAgent(allTools []tool.BaseTool, agentType types.AgentType) []
 		case types.AgentTypeCreativeAnalysis:
 			if strings.Contains(toolName, "trend") || strings.Contains(toolName, "hot") ||
 				strings.Contains(toolName, "search") || strings.Contains(toolName, "video") {
+				filtered = append(filtered, t)
+			}
+		case types.AgentTypeRAGSelector:
+			// RAG选择器不需要工具
+			filtered = nil
+		case types.AgentTypeRAG:
+			if strings.Contains(toolName, "search") || strings.Contains(toolName, "retrieve") ||
+				strings.Contains(toolName, "query") {
 				filtered = append(filtered, t)
 			}
 		default:
@@ -303,6 +316,45 @@ func (vg *VideoGraph) buildGraph() error {
 				}}, nil
 			}
 			return []*schema.Message{}, nil
+		}))
+	}
+
+	// 添加RAG知识库选择Agent节点
+	if vg.ragSelectorAgent != nil {
+		_ = g.AddLambdaNode("rag_selector_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+			var state *states.GraphState
+			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
+				state = s
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			log.Printf("[Graph] executing RAG selector agent for query: %s", state.OriginalQuery)
+
+			result, err := vg.ragSelectorAgent.Execute(ctx, state)
+			if err != nil {
+				log.Printf("[Graph] RAG selector agent error: %v", err)
+				return []*schema.Message{
+					schema.AssistantMessage(fmt.Sprintf("RAG知识库选择失败: %v", err), nil),
+				}, nil
+			}
+
+			state.SetAgentResult(types.AgentTypeRAGSelector, result)
+
+			// 解析选择结果，设置到状态中
+			if selection, parseErr := rag_selector.ParseSelectionResult(result.Content); parseErr == nil {
+				state.SetRAGSelection(selection)
+				log.Printf("[Graph] RAG selected %d knowledge bases", len(selection.SelectedKBs))
+			}
+
+			nextAgent, err := vg.ragSelectorAgent.Route(ctx, state, result)
+			log.Printf("[Graph] RAG selector agent route result: %s", nextAgent)
+
+			return []*schema.Message{
+				schema.AssistantMessage(result.Content, nil),
+			}, nil
 		}))
 	}
 

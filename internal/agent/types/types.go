@@ -20,6 +20,8 @@ const (
 	AgentTypeAnalysis         AgentType = "analysis"
 	AgentTypeCreation         AgentType = "creation"
 	AgentTypeCreativeAnalysis AgentType = "creative_analysis"
+	AgentTypeRAGSelector      AgentType = "rag_selector"
+	AgentTypeRAG              AgentType = "rag"
 	AgentTypeReport           AgentType = "report"
 	AgentTypeProfile          AgentType = "profile"
 	AgentTypeRecommend        AgentType = "recommend"
@@ -33,6 +35,8 @@ var AllAgentTypes = []AgentType{
 	AgentTypeAnalysis,
 	AgentTypeCreation,
 	AgentTypeCreativeAnalysis,
+	AgentTypeRAGSelector,
+	AgentTypeRAG,
 	AgentTypeReport,
 	AgentTypeProfile,
 	AgentTypeRecommend,
