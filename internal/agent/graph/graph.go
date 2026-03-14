@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"video_agent/internal/agent/agents/base"
+	"video_agent/internal/agent/agents/creative_analysis"
 	report "video_agent/internal/agent/agents/report"
 	"video_agent/internal/agent/agents/summary"
 	"video_agent/internal/agent/state"
@@ -32,11 +33,12 @@ const (
 )
 
 type VideoGraph struct {
-	runner      compose.Runnable[[]*schema.Message, []*schema.Message]
-	llm         model.ChatModel
-	mcpTools    []tool.BaseTool
-	reportAgent *report.ReportAgentNode
-	summaryNode *summary.SummaryNode
+	runner                compose.Runnable[[]*schema.Message, []*schema.Message]
+	llm                   model.ChatModel
+	mcpTools              []tool.BaseTool
+	reportAgent           *report.ReportAgentNode
+	creativeAnalysisAgent *creative_analysis.CreativeAnalysisAgentNode
+	summaryNode           *summary.SummaryNode
 }
 
 func NewVideoGraph(llm model.ChatModel, mcpServers []types.MCPServer) (*VideoGraph, error) {
@@ -56,13 +58,19 @@ func NewVideoGraph(llm model.ChatModel, mcpServers []types.MCPServer) (*VideoGra
 	reportTools := selectToolsForAgent(mcpTools, types.AgentTypeReport)
 	te := base.NewToolExecutor(reportTools, llm)
 	reportAgent := report.NewReportAgentNode(llm, te)
+
+	creativeAnalysisTools := selectToolsForAgent(mcpTools, types.AgentTypeCreativeAnalysis)
+	creativeAnalysisTE := base.NewToolExecutor(creativeAnalysisTools, llm)
+	creativeAnalysisAgent := creative_analysis.NewCreativeAnalysisAgentNode(llm, creativeAnalysisTE)
+
 	summaryNode := summary.NewSummaryNode(llm)
 
 	vg := &VideoGraph{
-		llm:         llm,
-		mcpTools:    mcpTools,
-		reportAgent: reportAgent,
-		summaryNode: summaryNode,
+		llm:                   llm,
+		mcpTools:              mcpTools,
+		reportAgent:           reportAgent,
+		creativeAnalysisAgent: creativeAnalysisAgent,
+		summaryNode:           summaryNode,
 	}
 
 	if err := vg.buildGraph(); err != nil {
@@ -108,6 +116,11 @@ func selectToolsForAgent(allTools []tool.BaseTool, agentType types.AgentType) []
 			if strings.Contains(toolName, "video") || strings.Contains(toolName, "recommend") {
 				filtered = append(filtered, t)
 			}
+		case types.AgentTypeCreativeAnalysis:
+			if strings.Contains(toolName, "trend") || strings.Contains(toolName, "hot") ||
+				strings.Contains(toolName, "search") || strings.Contains(toolName, "video") {
+				filtered = append(filtered, t)
+			}
 		default:
 			filtered = append(filtered, t)
 		}
@@ -141,7 +154,14 @@ func (vg *VideoGraph) buildGraph() error {
 		}
 
 		intentTemp := prompt.FromMessages(schema.FString,
-			schema.SystemMessage("你是一个意图识别专家。请严格按规则判断用户意图：\n规则：\n- 如果用户询问视频数据分析、视频统计、视频报表、生成报告、分析某个视频的任何内容，必须回答 'Report'\n- 如果用户只是闲聊、问候、普通问答，回答 'Chat'\n注意：只要涉及\"分析视频\"、\"视频数据\"、\"视频统计\"、\"报表\"等关键词，都必须回答 'Report'"),
+			schema.SystemMessage(`你是一个意图识别专家。请严格按规则判断用户意图：
+规则：
+- 如果用户询问视频数据分析、视频统计、视频报表、生成报告、分析某个视频的任何内容，必须回答 'Report'
+- 如果用户询问领域热门选题、创作趋势分析、竞品内容分析、受众需求洞察、"什么选题最火"、"XX领域有什么好的创作方向"等内容，必须回答 'Creative'
+- 如果用户只是闲聊、问候、普通问答，回答 'Chat'
+注意：
+- 只要涉及"分析视频"、"视频数据"、"视频统计"、"报表"等关键词，都必须回答 'Report'
+- 只要涉及"选题"、"热门"、"趋势"、"领域"、"创作方向"、"受众"等关键词，都必须回答 'Creative'`),
 			schema.UserMessage("{query}"),
 		)
 
@@ -247,6 +267,45 @@ func (vg *VideoGraph) buildGraph() error {
 		}))
 	}
 
+	// 添加创作分析Agent节点
+	if vg.creativeAnalysisAgent != nil {
+		_ = g.AddLambdaNode("creative_analysis_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+			var state *states.GraphState
+			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
+				state = s
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			log.Printf("[Graph] executing creative analysis agent for query: %s", state.OriginalQuery)
+
+			result, err := vg.creativeAnalysisAgent.Execute(ctx, state)
+			if err != nil {
+				log.Printf("[Graph] creative analysis agent error: %v", err)
+				return []*schema.Message{
+					schema.AssistantMessage(fmt.Sprintf("创作分析执行失败: %v", err), nil),
+				}, nil
+			}
+
+			state.SetAgentResult(types.AgentTypeCreativeAnalysis, result)
+
+			nextAgent, err := vg.creativeAnalysisAgent.Route(ctx, state, result)
+			log.Printf("[Graph] creative analysis agent route result: %s", nextAgent)
+
+			// 返回包含 ToolCalls 的消息
+			if len(result.ToolCalls) > 0 {
+				return []*schema.Message{{
+					Role:      schema.Assistant,
+					Content:   result.Content,
+					ToolCalls: result.ToolCalls,
+				}}, nil
+			}
+			return []*schema.Message{}, nil
+		}))
+	}
+
 	if len(vg.mcpTools) > 0 {
 		_ = g.AddLambdaNode(NodeMCPInput, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) (*schema.Message, error) {
 			if len(input) == 0 {
@@ -286,15 +345,20 @@ func (vg *VideoGraph) buildGraph() error {
 			if strings.Contains(content, "REPORT") {
 				return "report_agent", nil
 			}
+			if strings.Contains(content, "CREATIVE") {
+				return "creative_analysis_agent", nil
+			}
 			return NodeRAG, nil
 		},
 		map[string]bool{
-			"report_agent": true,
-			NodeRAG:        true,
+			"report_agent":            true,
+			"creative_analysis_agent": true,
+			NodeRAG:                   true,
 		},
 	))
 
 	_ = g.AddEdge("report_agent", NodeToToolCall)
+	_ = g.AddEdge("creative_analysis_agent", NodeToToolCall)
 	_ = g.AddEdge(NodeRAG, compose.END)
 
 	// 添加 Summary 节点，用于整合和格式化最终结果

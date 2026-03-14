@@ -13,17 +13,18 @@ import (
 type AgentType string
 
 const (
-	AgentTypeSupervisor   AgentType = "supervisor"
-	AgentTypeToolSelect   AgentType = "tool_select"
-	AgentTypeToolExecutor AgentType = "tool_executor"
-	AgentTypeVideo        AgentType = "video"
-	AgentTypeAnalysis     AgentType = "analysis"
-	AgentTypeCreation     AgentType = "creation"
-	AgentTypeReport       AgentType = "report"
-	AgentTypeProfile      AgentType = "profile"
-	AgentTypeRecommend    AgentType = "recommend"
-	AgentTypeSummary      AgentType = "summary"
-	AgentTypeEnd          AgentType = "end"
+	AgentTypeSupervisor       AgentType = "supervisor"
+	AgentTypeToolSelect       AgentType = "tool_select"
+	AgentTypeToolExecutor     AgentType = "tool_executor"
+	AgentTypeVideo            AgentType = "video"
+	AgentTypeAnalysis         AgentType = "analysis"
+	AgentTypeCreation         AgentType = "creation"
+	AgentTypeCreativeAnalysis AgentType = "creative_analysis"
+	AgentTypeReport           AgentType = "report"
+	AgentTypeProfile          AgentType = "profile"
+	AgentTypeRecommend        AgentType = "recommend"
+	AgentTypeSummary          AgentType = "summary"
+	AgentTypeEnd              AgentType = "end"
 )
 
 // AllAgentTypes 所有可用的Agent类型
@@ -31,6 +32,7 @@ var AllAgentTypes = []AgentType{
 	AgentTypeVideo,
 	AgentTypeAnalysis,
 	AgentTypeCreation,
+	AgentTypeCreativeAnalysis,
 	AgentTypeReport,
 	AgentTypeProfile,
 	AgentTypeRecommend,
