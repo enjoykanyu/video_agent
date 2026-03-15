@@ -242,3 +242,17 @@ func (s *GraphState) ShouldUseDirectLLM() bool {
 	}
 	return false
 }
+
+// SetRAGSelection 设置RAG知识库选择结果
+func (s *GraphState) SetRAGSelection(selection interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.RAGSelection = selection
+}
+
+// GetRAGSelection 获取RAG知识库选择结果
+func (s *GraphState) GetRAGSelection() interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.RAGSelection
+}
