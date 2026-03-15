@@ -15,6 +15,7 @@ import (
 	states "video_agent/internal/agent/state"
 	"video_agent/internal/agent/types"
 	"video_agent/mcp"
+	"video_agent/rag"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/prompt"
@@ -171,10 +172,12 @@ func (vg *VideoGraph) buildGraph() error {
 规则：
 - 如果用户询问视频数据分析、视频统计、视频报表、生成报告、分析某个视频的任何内容，必须回答 'Report'
 - 如果用户询问领域热门选题、创作趋势分析、竞品内容分析、受众需求洞察、"什么选题最火"、"XX领域有什么好的创作方向"等内容，必须回答 'Creative'
+- 如果用户询问查找资料、搜索文档、查询知识库、"从知识库中查找"、"检索XX资料"、产品功能、网站功能、系统功能、"这个网站/系统/产品是干什么的"、"怎么用"、"有什么功能"等内容，必须回答 'RAG'
 - 如果用户只是闲聊、问候、普通问答，回答 'Chat'
 注意：
 - 只要涉及"分析视频"、"视频数据"、"视频统计"、"报表"等关键词，都必须回答 'Report'
-- 只要涉及"选题"、"热门"、"趋势"、"领域"、"创作方向"、"受众"等关键词，都必须回答 'Creative'`),
+- 只要涉及"选题"、"热门"、"趋势"、"领域"、"创作方向"、"受众"等关键词，都必须回答 'Creative'
+- 只要涉及"查找"、"搜索"、"检索"、"知识库"、"资料"、"文档"、"功能"、"干什么"、"怎么用"、"是什么"等关键词，都必须回答 'RAG'`),
 			schema.UserMessage("{query}"),
 		)
 
@@ -214,11 +217,29 @@ func (vg *VideoGraph) buildGraph() error {
 
 		log.Printf("[Graph] RAG retrieval for query: %s", state.OriginalQuery)
 
-		state.SetRAGDocuments([]types.RAGDocument{})
-		state.FinalAnswer = "RAG检索完成"
+		docs := rag.RetrieverRAG(state.OriginalQuery)
+
+		var ragDocs []types.RAGDocument
+		for _, doc := range docs {
+			ragDocs = append(ragDocs, types.RAGDocument{
+				ID:       doc.ID,
+				Content:  doc.Content,
+				Metadata: doc.MetaData,
+			})
+		}
+
+		state.SetRAGDocuments(ragDocs)
+
+		var content strings.Builder
+		content.WriteString("RAG检索完成，找到以下相关资料：\n\n")
+		for i, doc := range docs {
+			content.WriteString(fmt.Sprintf("[%d] %s\n", i+1, doc.Content))
+		}
+
+		state.FinalAnswer = content.String()
 
 		return []*schema.Message{
-			schema.AssistantMessage("RAG检索完成", nil),
+			schema.AssistantMessage(content.String(), nil),
 		}, nil
 	}))
 
@@ -358,6 +379,33 @@ func (vg *VideoGraph) buildGraph() error {
 		}))
 	}
 
+	// 添加 Summary 节点，用于整合和格式化最终结果（必须在路由分支之前添加）
+	_ = g.AddLambdaNode(NodeSummary, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+		var state *states.GraphState
+		err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
+			state = s
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		log.Printf("[Graph] executing summary node for query: %s", state.OriginalQuery)
+
+		result, err := vg.summaryNode.Execute(ctx, state)
+		if err != nil {
+			log.Printf("[Graph] summary node error: %v", err)
+			return []*schema.Message{
+				schema.AssistantMessage(fmt.Sprintf("整合结果失败: %v", err), nil),
+			}, nil
+		}
+
+		state.FinalAnswer = result
+		return []*schema.Message{
+			schema.AssistantMessage(result, nil),
+		}, nil
+	}))
+
 	if len(vg.mcpTools) > 0 {
 		_ = g.AddLambdaNode(NodeMCPInput, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) (*schema.Message, error) {
 			if len(input) == 0 {
@@ -400,45 +448,27 @@ func (vg *VideoGraph) buildGraph() error {
 			if strings.Contains(content, "CREATIVE") {
 				return "creative_analysis_agent", nil
 			}
-			return NodeRAG, nil
+			if strings.Contains(content, "RAG") || strings.Contains(content, "知识库") {
+				return "rag_selector_agent", nil
+			}
+			if strings.Contains(content, "CHAT") {
+				return NodeSummary, nil
+			}
+			return NodeSummary, nil
 		},
 		map[string]bool{
 			"report_agent":            true,
 			"creative_analysis_agent": true,
+			"rag_selector_agent":      true,
 			NodeRAG:                   true,
+			NodeSummary:               true,
 		},
 	))
 
 	_ = g.AddEdge("report_agent", NodeToToolCall)
 	_ = g.AddEdge("creative_analysis_agent", NodeToToolCall)
-	_ = g.AddEdge(NodeRAG, compose.END)
-
-	// 添加 Summary 节点，用于整合和格式化最终结果
-	_ = g.AddLambdaNode(NodeSummary, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-		var state *states.GraphState
-		err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-			state = s
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		log.Printf("[Graph] executing summary node for query: %s", state.OriginalQuery)
-
-		result, err := vg.summaryNode.Execute(ctx, state)
-		if err != nil {
-			log.Printf("[Graph] summary node error: %v", err)
-			return []*schema.Message{
-				schema.AssistantMessage(fmt.Sprintf("整合结果失败: %v", err), nil),
-			}, nil
-		}
-
-		state.FinalAnswer = result
-		return []*schema.Message{
-			schema.AssistantMessage(result, nil),
-		}, nil
-	}))
+	_ = g.AddEdge("rag_selector_agent", NodeRAG)
+	_ = g.AddEdge(NodeRAG, NodeSummary)
 
 	if len(vg.mcpTools) > 0 {
 		_ = g.AddBranch(NodeToToolCall, compose.NewGraphBranch(
