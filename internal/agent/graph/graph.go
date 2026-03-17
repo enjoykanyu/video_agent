@@ -170,22 +170,30 @@ func (vg *VideoGraph) buildGraph() error {
 		intentTemp := prompt.FromMessages(schema.FString,
 			schema.SystemMessage(`你是一个意图识别专家。请严格按规则判断用户意图，只输出意图类型，不要解释：
 
-【规则】
-1. 如果用户询问视频数据分析、视频统计、视频报表、生成报告、分析某个视频的任何内容 → 回答 'Report'
-2. 如果用户询问领域热门选题、创作趋势分析、竞品内容分析、受众需求洞察、"什么选题最火"、"XX领域有什么好的创作方向" → 回答 'Creative'
-3. 如果用户询问以下任何内容 → 回答 'RAG'：
-   - 查找资料、搜索文档、查询知识库
-   - "从知识库中查找"、"检索XX资料"
-   - 产品功能、网站功能、系统功能
-   - "这个网站/系统/产品是干什么的"、"这个网站干啥的"
-   - "怎么用"、"有什么功能"、"如何使用"
-   - "是什么"、"介绍"
-4. 其他闲聊、问候 → 回答 'Chat'
+【判断优先级 - 从上到下依次检查，匹配到立即停止】
 
-【关键词匹配】
-- 包含"视频数据"、"报表"、"分析视频" → Report
-- 包含"选题"、"热门"、"趋势" → Creative
-- 包含"功能"、"干什么"、"怎么用"、"是什么"、"介绍"、"网站"、"系统" → RAG
+最高优先级 - RAG（知识库查询）：
+如果用户查询包含以下任何内容，立即回答 'RAG'：
+- "网站" + "干啥/干什么/是什么/功能" → RAG
+- "系统" + "干啥/干什么/是什么/功能" → RAG  
+- "产品" + "干啥/干什么/是什么/功能" → RAG
+- "怎么用"、"如何使用"、"有什么功能"
+- "查找资料"、"搜索文档"、"查询知识库"
+- "介绍" + 产品/网站/系统名称
+
+第二优先级 - Report（视频数据分析）：
+- "视频数据"、"视频统计"、"视频报表"、"生成报告"、"分析视频" → Report
+
+第三优先级 - Creative（创作分析）：
+- "选题"、"热门"、"趋势"、"创作方向"、"竞品分析"、"什么选题最火" → Creative
+
+最低优先级 - Chat（闲聊）：
+- 问候语、日常对话、不涉及上述任何功能的问题 → Chat
+
+【重要示例】
+- "visionWorld网站干啥的" → RAG（包含"网站"+"干啥"）
+- "这个系统怎么用" → RAG（包含"系统"+"怎么用"）
+- "介绍一下产品功能" → RAG（包含"介绍"+"功能"）
 
 【输出格式】
 只输出一个单词：Report / Creative / RAG / Chat
@@ -230,23 +238,40 @@ func (vg *VideoGraph) buildGraph() error {
 
 		log.Printf("[Graph] RAG retrieval for query: %s", state.OriginalQuery)
 
-		docs := rag.RetrieverRAG(state.OriginalQuery)
+		// 使用带相似度分数的检索，阈值 0.7，只返回相关文档
+		docsWithScore := rag.RetrieverRAGWithScore(state.OriginalQuery, 0.7)
+
+		// 限制返回数量，最多3条最相关的
+		maxDocs := 3
+		if len(docsWithScore) < maxDocs {
+			maxDocs = len(docsWithScore)
+		}
 
 		var ragDocs []types.RAGDocument
-		for _, doc := range docs {
+		var topDocs []*schema.Document
+		for i := 0; i < maxDocs; i++ {
+			doc := docsWithScore[i]
+			topDocs = append(topDocs, doc.Document)
 			ragDocs = append(ragDocs, types.RAGDocument{
-				ID:       doc.ID,
-				Content:  doc.Content,
-				Metadata: doc.MetaData,
+				ID:       doc.Document.ID,
+				Content:  doc.Document.Content,
+				Metadata: doc.Document.MetaData,
 			})
+			log.Printf("[Graph] RAG result [%d] score=%.4f, level=%s",
+				i+1, doc.Score, rag.GetSimilarityLevel(doc.Score))
 		}
 
 		state.SetRAGDocuments(ragDocs)
 
+		// 构建更清晰的上下文
 		var content strings.Builder
-		content.WriteString("RAG检索完成，找到以下相关资料：\n\n")
-		for i, doc := range docs {
-			content.WriteString(fmt.Sprintf("[%d] %s\n", i+1, doc.Content))
+		if len(topDocs) > 0 {
+			content.WriteString("根据知识库检索，为您找到以下最相关的信息：\n\n")
+			for i, doc := range topDocs {
+				content.WriteString(fmt.Sprintf("%d. %s\n", i+1, doc.Content))
+			}
+		} else {
+			content.WriteString("未在知识库中找到相关信息。")
 		}
 
 		state.FinalAnswer = content.String()
