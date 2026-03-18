@@ -49,6 +49,9 @@ type GraphState struct {
 	// RAGSelection RAG知识库选择结果
 	RAGSelection interface{}
 
+	// OptimizedQuery RAG优化后的查询
+	OptimizedQuery string
+
 	FinalAnswer string
 }
 
@@ -255,4 +258,18 @@ func (s *GraphState) GetRAGSelection() interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.RAGSelection
+}
+
+// SetOptimizedQuery 设置优化后的查询
+func (s *GraphState) SetOptimizedQuery(query string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.OptimizedQuery = query
+}
+
+// GetOptimizedQuery 获取优化后的查询
+func (s *GraphState) GetOptimizedQuery() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.OptimizedQuery
 }

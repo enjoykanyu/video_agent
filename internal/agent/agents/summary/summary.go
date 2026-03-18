@@ -24,18 +24,15 @@ func NewSummaryNode(llm model.ChatModel) *SummaryNode {
 func (s *SummaryNode) Execute(ctx context.Context, state *states.GraphState) (string, error) {
 	log.Printf("[Summary] starting, agent results count: %d", len(state.AgentResults))
 
+	// 如果已经有 FinalAnswer（如 RAG 直接生成的答案），直接返回
+	if state.FinalAnswer != "" && len(state.AgentResults) <= 1 {
+		log.Printf("[Summary] using FinalAnswer directly")
+		return state.FinalAnswer, nil
+	}
+
 	// 如果没有Agent执行过（通用对话），直接用LLM回答
 	if len(state.AgentResults) == 0 {
 		return s.directAnswer(ctx, state)
-	}
-
-	// 如果只有一个Agent的结果，且没有错误，直接返回
-	if len(state.AgentResults) == 1 {
-		for _, result := range state.AgentResults {
-			if result.Error == "" {
-				return result.Content, nil
-			}
-		}
 	}
 
 	// 多Agent结果整合

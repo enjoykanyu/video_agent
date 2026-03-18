@@ -27,6 +27,13 @@ const (
 	AgentTypeRecommend        AgentType = "recommend"
 	AgentTypeSummary          AgentType = "summary"
 	AgentTypeEnd              AgentType = "end"
+	// 新增 Agent 类型
+	AgentTypeCommentAnalysis  AgentType = "comment_analysis"
+	AgentTypeVideoRecommend   AgentType = "video_recommend"
+	AgentTypeUserLikedVideos  AgentType = "user_liked_videos"
+	AgentTypeHotVideo         AgentType = "hot_video"
+	AgentTypeHotLive          AgentType = "hot_live"
+	AgentTypeVideoSummary     AgentType = "video_summary"
 )
 
 // AllAgentTypes 所有可用的Agent类型

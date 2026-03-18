@@ -106,8 +106,8 @@ const (
 func (a *RAGSelectorAgentNode) analyzeIntent(query string) IntentType {
 	query = strings.ToLower(query)
 
-	// 产品相关关键词
-	productKeywords := []string{"产品", "功能", "特性", "怎么用", "使用", "操作", "界面", "设置"}
+	// 产品相关关键词（包括"干啥"、"干什么"、"是什么"等）
+	productKeywords := []string{"产品", "功能", "特性", "怎么用", "使用", "操作", "界面", "设置", "干啥", "干什么", "做什么", "介绍"}
 	for _, kw := range productKeywords {
 		if strings.Contains(query, kw) {
 			return IntentProduct
@@ -131,7 +131,7 @@ func (a *RAGSelectorAgentNode) analyzeIntent(query string) IntentType {
 	}
 
 	// FAQ相关关键词
-	faqKeywords := []string{"怎么", "如何", "为什么", "是什么", "怎么办", "问题", "故障", "错误"}
+	faqKeywords := []string{"如何", "为什么", "怎么办", "问题", "故障", "错误"}
 	for _, kw := range faqKeywords {
 		if strings.Contains(query, kw) {
 			return IntentFAQ
@@ -228,17 +228,20 @@ func (a *RAGSelectorAgentNode) optimizeQuery(query string, intent IntentType) st
 	// 根据意图添加优化关键词
 	switch intent {
 	case IntentProduct:
-		if !strings.Contains(query, "功能") && !strings.Contains(query, "使用") {
-			query = query + " 功能使用说明"
-		}
+		// 产品意图：添加功能介绍相关关键词
+		query = query + " 功能介绍 使用说明"
 	case IntentTechnical:
-		if !strings.Contains(query, "技术") && !strings.Contains(query, "实现") {
-			query = query + " 技术实现"
-		}
+		// 技术意图：添加技术实现相关关键词
+		query = query + " 技术实现 开发文档"
 	case IntentBusiness:
-		if !strings.Contains(query, "流程") && !strings.Contains(query, "规则") {
-			query = query + " 业务流程"
-		}
+		// 业务意图：添加业务流程相关关键词
+		query = query + " 业务流程 规则说明"
+	case IntentFAQ:
+		// FAQ意图：添加常见问题相关关键词
+		query = query + " 常见问题 解决方法"
+	default:
+		// 通用意图：添加通用优化词
+		query = query + " 介绍 说明"
 	}
 
 	return query
