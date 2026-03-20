@@ -42,8 +42,35 @@ var fields = []*entity.Field{
 	},
 }
 
+// IndexerRAG 索引文档（支持语义分块）
 func IndexerRAG(docs []*schema.Document) {
+	IndexerRAGWithChunking(docs, nil)
+}
+
+// IndexerRAGWithChunking 索引文档（带分块）
+func IndexerRAGWithChunking(docs []*schema.Document, chunkConfig *ChunkConfig) {
 	ctx := context.Background()
+
+	// 如果配置了分块，先进行分块
+	var docsToIndex []*schema.Document
+	if chunkConfig != nil {
+		chunker := NewChunker(chunkConfig)
+		for _, doc := range docs {
+			chunks, err := chunker.Chunk(ctx, doc)
+			if err != nil {
+				log.Printf("分块文档 %s 失败: %v", doc.ID, err)
+				docsToIndex = append(docsToIndex, doc)
+				continue
+			}
+			// 将 chunks 转换为 documents
+			chunkDocs := ChunksToDocuments(chunks)
+			docsToIndex = append(docsToIndex, chunkDocs...)
+			log.Printf("文档 %s 分块为 %d 个片段", doc.ID, len(chunks))
+		}
+	} else {
+		docsToIndex = docs
+	}
+
 	// 初始化自定义嵌入器（确保返回 Float64 向量）
 	embedder, err := NewOllamaEmbedder(&OllamaEmbedderConfig{
 		BaseURL: "http://localhost:11434",
@@ -64,7 +91,9 @@ func IndexerRAG(docs []*schema.Document) {
 	if err != nil {
 		log.Fatalf("Failed to create indexer: %v", err)
 	}
-	for _, doc := range docs {
+
+	// 批量存储
+	for _, doc := range docsToIndex {
 		storeDoc := []*schema.Document{
 			{
 				ID:       doc.ID,
@@ -78,9 +107,9 @@ func IndexerRAG(docs []*schema.Document) {
 		if err != nil {
 			log.Fatalf("Failed to store documents: %v", err)
 		}
-		//println("Stored documents with IDs: %v", ids)
-		//fmt.Print(ids)
 	}
+
+	log.Printf("共索引 %d 个文档片段", len(docsToIndex))
 }
 
 func binaryDocumentConverter(ctx context.Context, docs []*schema.Document, vectors [][]float64) ([]interface{}, error) {
