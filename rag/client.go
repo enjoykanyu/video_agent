@@ -10,9 +10,12 @@ import (
 
 var MilvusCli cli.Client
 
-func init() {
-	// 使用带超时的上下文，避免阻塞程序启动
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func EnsureMilvusConnected() error {
+	if MilvusCli != nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	client, err := cli.NewClient(ctx, cli.Config{
@@ -20,9 +23,17 @@ func init() {
 		DBName:  "eino_rag",
 	})
 	if err != nil {
-		log.Printf("[RAG] Milvus 连接失败 (将在使用时重试): %v", err)
-		return
+		log.Printf("[RAG] Milvus 连接失败: %v", err)
+		return err
 	}
+
 	MilvusCli = client
-	log.Println("[RAG] Milvus 客户端初始化成功")
+	log.Println("[RAG] Milvus 客户端连接成功")
+	return nil
+}
+
+func init() {
+	if err := EnsureMilvusConnected(); err != nil {
+		log.Printf("[RAG] Milvus 初始连接失败，将在首次检索时重试: %v", err)
+	}
 }

@@ -918,18 +918,35 @@ func generateRAGAnswer(ctx context.Context, llm model.ChatModel, query string, r
 
 【回答规则】
 1. 只使用提供的知识库内容回答，不要编造信息
-2. 如果知识库内容与问题相关，请给出清晰、自然的回答
-3. 如果知识库内容为空或不相关，请礼貌地告知用户未找到相关信息
-4. 回答要简洁明了，直接回答问题`
+2. 必须直接回答用户问题，不要绕弯子或给出模糊的"参考相关文档"之类的回答
+3. 如果知识库内容包含功能介绍，请直接列出具体功能，不要概括性描述
+4. 回答要简洁明了，突出核心信息，禁止出现"若需进一步信息"、"请参考相关文档"等推诿性语句
+
+【强制要求】
+- 用户问"这个网站是做什么的"或"有什么功能"时，必须直接列出网站的核心功能
+- 禁止回答"主要涉及产品文档中的核心内容"这种模糊表述
+- 必须从知识库内容中提取具体功能点并清晰呈现
+
+【示例】
+用户问：这个网站是做什么的？
+知识库内容包含：视频观看、直播互动、内容创作
+正确回答：VisionWorld是一个在线视频平台，主要功能包括：1. 视频观看 - 浏览各类创意视频；2. 直播互动 - 观看实时直播、发送弹幕、赠送礼物；3. 内容创作 - 创作者上传分享视频作品。
+
+错误回答：该网站的功能介绍与使用说明主要涉及产品文档中的核心内容...`
 
 	messages := []*schema.Message{
 		schema.SystemMessage(ragAnswerPrompt),
 	}
 
-	// 添加检索上下文
-	if ragResult != nil && ragResult.HasResult && ragResult.TopDocument != nil {
-		contextMsg := fmt.Sprintf("【知识库内容】\n%s", ragResult.TopDocument.Content)
-		messages = append(messages, schema.SystemMessage(contextMsg))
+	// 添加检索上下文 - 使用所有检索到的文档，而不仅仅是 Top-1
+	if ragResult != nil && ragResult.HasResult && len(ragResult.Documents) > 0 {
+		var contextBuilder strings.Builder
+		contextBuilder.WriteString("【知识库内容】\n")
+		for i, doc := range ragResult.Documents {
+			contextBuilder.WriteString(fmt.Sprintf("\n--- 文档 %d (相似度: %.2f) ---\n", i+1, doc.Score))
+			contextBuilder.WriteString(doc.Content)
+		}
+		messages = append(messages, schema.SystemMessage(contextBuilder.String()))
 	} else {
 		messages = append(messages, schema.SystemMessage("【知识库内容】\n未找到相关信息。"))
 	}

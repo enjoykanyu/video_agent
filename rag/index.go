@@ -3,15 +3,15 @@ package rag
 import (
 	"context"
 	"fmt"
-	"github.com/cloudwego/eino-ext/components/embedding/ollama"
+	"log"
+	"time"
+
 	"github.com/cloudwego/eino-ext/components/indexer/milvus"
 	"github.com/cloudwego/eino/schema"
 	"github.com/milvus-io/milvus-sdk-go/v2/entity"
-	"log"
-	"time"
 )
 
-var collection = "test_index"
+var collection = "website_kb"
 
 var fields = []*entity.Field{
 	{
@@ -23,10 +23,10 @@ var fields = []*entity.Field{
 		PrimaryKey: true,
 	},
 	{
-		Name:     "vector",                     // 确保字段名匹配
-		DataType: entity.FieldTypeBinaryVector, // qwen3-embedding:0.6b
+		Name:     "vector",
+		DataType: entity.FieldTypeFloatVector,
 		TypeParams: map[string]string{
-			"dim": "32768", //  qwen3-embedding:0.6b正确维度
+			"dim": "1024",
 		},
 	},
 	{
@@ -44,8 +44,8 @@ var fields = []*entity.Field{
 
 func IndexerRAG(docs []*schema.Document) {
 	ctx := context.Background()
-	// 初始化嵌入器
-	embedder, err := ollama.NewEmbedder(ctx, &ollama.EmbeddingConfig{
+	// 初始化自定义嵌入器（确保返回 Float64 向量）
+	embedder, err := NewOllamaEmbedder(&OllamaEmbedderConfig{
 		BaseURL: "http://localhost:11434",
 		Model:   "qwen3-embedding:0.6b",
 		Timeout: 10 * time.Second,
@@ -55,11 +55,11 @@ func IndexerRAG(docs []*schema.Document) {
 	}
 
 	indexer, err := milvus.NewIndexer(ctx, &milvus.IndexerConfig{
-		Client:     MilvusCli,
-		Collection: collection,
-		Fields:     fields,
-		Embedding:  embedder,
-		//DocumentConverter: binaryDocumentConverter,
+		Client:            MilvusCli,
+		Collection:        collection,
+		Fields:            fields,
+		Embedding:         embedder,
+		DocumentConverter: floatDocumentConverter,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create indexer: %v", err)
