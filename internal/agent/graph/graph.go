@@ -38,6 +38,17 @@ const (
 	NodeMCPInput    = "mcp_input"
 	NodeMCP         = "mcp"
 	NodeSummary     = "summary"
+
+	// Agent 节点名称常量
+	NodeReportAgent           = "report_agent"
+	NodeCreativeAnalysisAgent = "creative_analysis_agent"
+	NodeRAGSelectorAgent      = "rag_selector_agent"
+	NodeCommentAnalysisAgent  = "comment_analysis_agent"
+	NodeVideoRecommendAgent   = "video_recommend_agent"
+	NodeUserLikedVideosAgent  = "user_liked_videos_agent"
+	NodeHotVideoAgent         = "hot_video_agent"
+	NodeHotLiveAgent          = "hot_live_agent"
+	NodeVideoSummaryAgent     = "video_summary_agent"
 )
 
 type VideoGraph struct {
@@ -54,6 +65,12 @@ type VideoGraph struct {
 	hotVideoAgent         *hot_video.HotVideoAgentNode
 	hotLiveAgent          *hot_live.HotLiveAgentNode
 	videoSummaryAgent     *video_summary.VideoSummaryAgentNode
+}
+
+// AgentNode 定义 Agent 节点的通用接口
+type AgentNode interface {
+	Execute(ctx context.Context, state *states.GraphState) (*types.AgentResult, error)
+	Route(ctx context.Context, state *states.GraphState, result *types.AgentResult) (types.AgentType, error)
 }
 
 func NewVideoGraph(llm model.ChatModel, mcpServers []types.MCPServer) (*VideoGraph, error) {
@@ -126,6 +143,46 @@ func NewVideoGraph(llm model.ChatModel, mcpServers []types.MCPServer) (*VideoGra
 	}
 
 	return vg, nil
+}
+
+// createAgentLambda 创建 Agent 节点的 Lambda 函数（使用标准 Node 类型模式）
+func (vg *VideoGraph) createAgentLambda(agent AgentNode, agentType types.AgentType, agentName string) *compose.Lambda {
+	return compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+		var state *states.GraphState
+		err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
+			state = s
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		log.Printf("[Graph] executing %s for query: %s", agentName, state.OriginalQuery)
+
+		result, err := agent.Execute(ctx, state)
+		if err != nil {
+			log.Printf("[Graph] %s error: %v", agentName, err)
+			return []*schema.Message{
+				schema.AssistantMessage(fmt.Sprintf("执行失败: %v", err), nil),
+			}, nil
+		}
+
+		state.SetAgentResult(agentType, result)
+
+		nextAgent, _ := agent.Route(ctx, state, result)
+		log.Printf("[Graph] %s route result: %s", agentName, nextAgent)
+
+		// 返回包含 ToolCalls 的消息，让后续节点处理
+		if len(result.ToolCalls) > 0 {
+			return []*schema.Message{{
+				Role:      schema.Assistant,
+				Content:   result.Content,
+				ToolCalls: result.ToolCalls,
+			}}, nil
+		}
+		// 没有 ToolCalls，返回空消息继续到 Summary 节点
+		return []*schema.Message{}, nil
+	})
 }
 
 func selectToolsForAgent(allTools []tool.BaseTool, agentType types.AgentType) []tool.BaseTool {
@@ -337,7 +394,7 @@ func (vg *VideoGraph) buildGraph() error {
 		log.Printf("[Graph] RAG retrieval for query: %s", query)
 
 		// 企业级 RAG 流程：检索 → 阈值过滤 → LLM 生成
-		// 使用余弦相似度，阈值 0.75
+		// 使用向量检索
 		ragResult := rag.RetrieverRAGTop1(query, rag.ScoreRelevant)
 
 		var answer string
@@ -401,87 +458,21 @@ func (vg *VideoGraph) buildGraph() error {
 		return []*schema.Message{toolCallMsg}, nil
 	}))
 
+	// 添加 Report Agent 节点（使用标准 Lambda 封装）
 	if vg.reportAgent != nil {
-		_ = g.AddLambdaNode("report_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing report agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.reportAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] report agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeReport, result)
-
-			nextAgent, err := vg.reportAgent.Route(ctx, state, result)
-			log.Printf("[Graph] report agent route result: %s", nextAgent)
-
-			// 返回包含 ToolCalls 的消息，让后续节点处理
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			// 没有 ToolCalls，返回空消息继续到 Summary 节点
-			return []*schema.Message{}, nil
-		}))
+		reportLambda := vg.createAgentLambda(vg.reportAgent, types.AgentTypeReport, NodeReportAgent)
+		_ = g.AddLambdaNode(NodeReportAgent, reportLambda)
 	}
 
-	// 添加创作分析Agent节点
+	// 添加创作分析 Agent 节点（使用标准 Lambda 封装）
 	if vg.creativeAnalysisAgent != nil {
-		_ = g.AddLambdaNode("creative_analysis_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing creative analysis agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.creativeAnalysisAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] creative analysis agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("创作分析执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeCreativeAnalysis, result)
-
-			nextAgent, err := vg.creativeAnalysisAgent.Route(ctx, state, result)
-			log.Printf("[Graph] creative analysis agent route result: %s", nextAgent)
-
-			// 返回包含 ToolCalls 的消息
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		creativeLambda := vg.createAgentLambda(vg.creativeAnalysisAgent, types.AgentTypeCreativeAnalysis, NodeCreativeAnalysisAgent)
+		_ = g.AddLambdaNode(NodeCreativeAnalysisAgent, creativeLambda)
 	}
 
-	// 添加RAG知识库选择Agent节点
+	// 添加 RAG 知识库选择 Agent 节点（保留特殊处理逻辑）
 	if vg.ragSelectorAgent != nil {
-		_ = g.AddLambdaNode("rag_selector_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
+		_ = g.AddLambdaNode(NodeRAGSelectorAgent, compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
 			var state *states.GraphState
 			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
 				state = s
@@ -521,232 +512,40 @@ func (vg *VideoGraph) buildGraph() error {
 		}))
 	}
 
-	// 添加评论分析Agent节点
+	// 添加评论分析 Agent 节点（使用标准 Lambda 封装）
 	if vg.commentAnalysisAgent != nil {
-		_ = g.AddLambdaNode("comment_analysis_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing comment analysis agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.commentAnalysisAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] comment analysis agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("评论分析执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeCommentAnalysis, result)
-
-			nextAgent, err := vg.commentAnalysisAgent.Route(ctx, state, result)
-			log.Printf("[Graph] comment analysis agent route result: %s", nextAgent)
-
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		commentLambda := vg.createAgentLambda(vg.commentAnalysisAgent, types.AgentTypeCommentAnalysis, NodeCommentAnalysisAgent)
+		_ = g.AddLambdaNode(NodeCommentAnalysisAgent, commentLambda)
 	}
 
-	// 添加视频推荐Agent节点
+	// 添加视频推荐 Agent 节点（使用标准 Lambda 封装）
 	if vg.videoRecommendAgent != nil {
-		_ = g.AddLambdaNode("video_recommend_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing video recommend agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.videoRecommendAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] video recommend agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("视频推荐执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeVideoRecommend, result)
-
-			nextAgent, err := vg.videoRecommendAgent.Route(ctx, state, result)
-			log.Printf("[Graph] video recommend agent route result: %s", nextAgent)
-
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		recommendLambda := vg.createAgentLambda(vg.videoRecommendAgent, types.AgentTypeVideoRecommend, NodeVideoRecommendAgent)
+		_ = g.AddLambdaNode(NodeVideoRecommendAgent, recommendLambda)
 	}
 
-	// 添加用户点赞视频Agent节点
+	// 添加用户点赞视频 Agent 节点（使用标准 Lambda 封装）
 	if vg.userLikedVideosAgent != nil {
-		_ = g.AddLambdaNode("user_liked_videos_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing user liked videos agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.userLikedVideosAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] user liked videos agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("点赞视频查询执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeUserLikedVideos, result)
-
-			nextAgent, err := vg.userLikedVideosAgent.Route(ctx, state, result)
-			log.Printf("[Graph] user liked videos agent route result: %s", nextAgent)
-
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		likedLambda := vg.createAgentLambda(vg.userLikedVideosAgent, types.AgentTypeUserLikedVideos, NodeUserLikedVideosAgent)
+		_ = g.AddLambdaNode(NodeUserLikedVideosAgent, likedLambda)
 	}
 
-	// 添加热门视频Agent节点
+	// 添加热门视频 Agent 节点（使用标准 Lambda 封装）
 	if vg.hotVideoAgent != nil {
-		_ = g.AddLambdaNode("hot_video_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing hot video agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.hotVideoAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] hot video agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("热门视频查询执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeHotVideo, result)
-
-			nextAgent, err := vg.hotVideoAgent.Route(ctx, state, result)
-			log.Printf("[Graph] hot video agent route result: %s", nextAgent)
-
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		hotVideoLambda := vg.createAgentLambda(vg.hotVideoAgent, types.AgentTypeHotVideo, NodeHotVideoAgent)
+		_ = g.AddLambdaNode(NodeHotVideoAgent, hotVideoLambda)
 	}
 
-	// 添加热门直播Agent节点
+	// 添加热门直播 Agent 节点（使用标准 Lambda 封装）
 	if vg.hotLiveAgent != nil {
-		_ = g.AddLambdaNode("hot_live_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing hot live agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.hotLiveAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] hot live agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("热门直播查询执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeHotLive, result)
-
-			nextAgent, err := vg.hotLiveAgent.Route(ctx, state, result)
-			log.Printf("[Graph] hot live agent route result: %s", nextAgent)
-
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		hotLiveLambda := vg.createAgentLambda(vg.hotLiveAgent, types.AgentTypeHotLive, NodeHotLiveAgent)
+		_ = g.AddLambdaNode(NodeHotLiveAgent, hotLiveLambda)
 	}
 
-	// 添加视频总结Agent节点
+	// 添加视频总结 Agent 节点（使用标准 Lambda 封装）
 	if vg.videoSummaryAgent != nil {
-		_ = g.AddLambdaNode("video_summary_agent", compose.InvokableLambda(func(ctx context.Context, input []*schema.Message) ([]*schema.Message, error) {
-			var state *states.GraphState
-			err := compose.ProcessState(ctx, func(ctx context.Context, s *states.GraphState) error {
-				state = s
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-
-			log.Printf("[Graph] executing video summary agent for query: %s", state.OriginalQuery)
-
-			result, err := vg.videoSummaryAgent.Execute(ctx, state)
-			if err != nil {
-				log.Printf("[Graph] video summary agent error: %v", err)
-				return []*schema.Message{
-					schema.AssistantMessage(fmt.Sprintf("视频总结执行失败: %v", err), nil),
-				}, nil
-			}
-
-			state.SetAgentResult(types.AgentTypeVideoSummary, result)
-
-			nextAgent, err := vg.videoSummaryAgent.Route(ctx, state, result)
-			log.Printf("[Graph] video summary agent route result: %s", nextAgent)
-
-			if len(result.ToolCalls) > 0 {
-				return []*schema.Message{{
-					Role:      schema.Assistant,
-					Content:   result.Content,
-					ToolCalls: result.ToolCalls,
-				}}, nil
-			}
-			return []*schema.Message{}, nil
-		}))
+		videoSummaryLambda := vg.createAgentLambda(vg.videoSummaryAgent, types.AgentTypeVideoSummary, NodeVideoSummaryAgent)
+		_ = g.AddLambdaNode(NodeVideoSummaryAgent, videoSummaryLambda)
 	}
 
 	// 添加 Summary 节点，用于整合和格式化最终结果（必须在路由分支之前添加）
@@ -806,6 +605,7 @@ func (vg *VideoGraph) buildGraph() error {
 	_ = g.AddEdge(compose.START, NodeIntentModel)
 	_ = g.AddEdge(NodeIntentModel, NodeTransList)
 
+	// 使用标准 GraphBranch 进行意图路由
 	_ = g.AddBranch(NodeTransList, compose.NewGraphBranch(
 		func(ctx context.Context, msgs []*schema.Message) (string, error) {
 			if len(msgs) == 0 {
@@ -813,31 +613,31 @@ func (vg *VideoGraph) buildGraph() error {
 			}
 			content := strings.ToUpper(msgs[len(msgs)-1].Content)
 			if strings.Contains(content, "REPORT") {
-				return "report_agent", nil
+				return NodeReportAgent, nil
 			}
 			if strings.Contains(content, "CREATIVE") {
-				return "creative_analysis_agent", nil
+				return NodeCreativeAnalysisAgent, nil
 			}
 			if strings.Contains(content, "RAG") || strings.Contains(content, "知识库") {
-				return "rag_selector_agent", nil
+				return NodeRAGSelectorAgent, nil
 			}
 			if strings.Contains(content, "COMMENTANALYSIS") || strings.Contains(content, "COMMENT_ANALYSIS") {
-				return "comment_analysis_agent", nil
+				return NodeCommentAnalysisAgent, nil
 			}
 			if strings.Contains(content, "VIDEORECOMMEND") || strings.Contains(content, "VIDEO_RECOMMEND") {
-				return "video_recommend_agent", nil
+				return NodeVideoRecommendAgent, nil
 			}
 			if strings.Contains(content, "USERLIKEDVIDEOS") || strings.Contains(content, "USER_LIKED_VIDEOS") {
-				return "user_liked_videos_agent", nil
+				return NodeUserLikedVideosAgent, nil
 			}
 			if strings.Contains(content, "HOTVIDEO") || strings.Contains(content, "HOT_VIDEO") {
-				return "hot_video_agent", nil
+				return NodeHotVideoAgent, nil
 			}
 			if strings.Contains(content, "HOTLIVE") || strings.Contains(content, "HOT_LIVE") {
-				return "hot_live_agent", nil
+				return NodeHotLiveAgent, nil
 			}
 			if strings.Contains(content, "VIDEOSUMMARY") || strings.Contains(content, "VIDEO_SUMMARY") {
-				return "video_summary_agent", nil
+				return NodeVideoSummaryAgent, nil
 			}
 			if strings.Contains(content, "CHAT") {
 				return NodeSummary, nil
@@ -845,30 +645,31 @@ func (vg *VideoGraph) buildGraph() error {
 			return NodeSummary, nil
 		},
 		map[string]bool{
-			"report_agent":            true,
-			"creative_analysis_agent": true,
-			"rag_selector_agent":      true,
-			"comment_analysis_agent":  true,
-			"video_recommend_agent":   true,
-			"user_liked_videos_agent": true,
-			"hot_video_agent":         true,
-			"hot_live_agent":          true,
-			"video_summary_agent":     true,
+			NodeReportAgent:           true,
+			NodeCreativeAnalysisAgent: true,
+			NodeRAGSelectorAgent:      true,
+			NodeCommentAnalysisAgent:  true,
+			NodeVideoRecommendAgent:   true,
+			NodeUserLikedVideosAgent:  true,
+			NodeHotVideoAgent:         true,
+			NodeHotLiveAgent:          true,
+			NodeVideoSummaryAgent:     true,
 			NodeRAG:                   true,
 			NodeSummary:               true,
 		},
 	))
 
-	_ = g.AddEdge("report_agent", NodeToToolCall)
-	_ = g.AddEdge("creative_analysis_agent", NodeToToolCall)
-	_ = g.AddEdge("rag_selector_agent", NodeRAG)
+	// 使用常量定义节点连接边
+	_ = g.AddEdge(NodeReportAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeCreativeAnalysisAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeRAGSelectorAgent, NodeRAG)
 	_ = g.AddEdge(NodeRAG, NodeSummary)
-	_ = g.AddEdge("comment_analysis_agent", NodeToToolCall)
-	_ = g.AddEdge("video_recommend_agent", NodeToToolCall)
-	_ = g.AddEdge("user_liked_videos_agent", NodeToToolCall)
-	_ = g.AddEdge("hot_video_agent", NodeToToolCall)
-	_ = g.AddEdge("hot_live_agent", NodeToToolCall)
-	_ = g.AddEdge("video_summary_agent", NodeToToolCall)
+	_ = g.AddEdge(NodeCommentAnalysisAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeVideoRecommendAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeUserLikedVideosAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeHotVideoAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeHotLiveAgent, NodeToToolCall)
+	_ = g.AddEdge(NodeVideoSummaryAgent, NodeToToolCall)
 
 	if len(vg.mcpTools) > 0 {
 		_ = g.AddBranch(NodeToToolCall, compose.NewGraphBranch(
