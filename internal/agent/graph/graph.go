@@ -296,57 +296,73 @@ func (vg *VideoGraph) buildGraph() error {
 		}
 
 		intentTemp := prompt.FromMessages(schema.FString,
-			schema.SystemMessage(`你是一个意图识别专家。请严格按规则判断用户意图，只输出意图类型，不要解释：
+			schema.SystemMessage(`你是一个意图识别专家。请分析用户查询，只输出意图类型。
 
-【判断优先级 - 从上到下依次检查，匹配到立即停止】
+【意图类型定义】
+1. RAG - 知识库查询：询问网站/系统/产品的功能、介绍、使用方法
+2. Report - 视频数据分析：分析视频数据、生成报表、统计数据、查询视频信息
+3. VideoSummary - 视频内容总结：总结视频内容、视频讲什么
+4. CommentAnalysis - 评论分析：分析评论、弹幕、观众反馈
+5. VideoRecommend - 视频推荐：推荐视频、找好看的内容（注意：不是分析已有视频）
+6. UserLikedVideos - 点赞查询：查询点赞记录、喜欢的视频
+7. HotVideo - 热门视频：查询最火视频、热门内容
+8. HotLive - 热门直播：查询热门直播、正在直播
+9. Creative - 创作分析：选题分析、趋势分析、竞品分析
+10. Chat - 闲聊：问候、日常对话
 
-最高优先级 - RAG（知识库查询）：
-如果用户查询包含以下任何内容，立即回答 'RAG'：
-- "网站" + "干啥/干什么/是什么/功能" → RAG
-- "系统" + "干啥/干什么/是什么/功能" → RAG  
-- "产品" + "干啥/干什么/是什么/功能" → RAG
-- "怎么用"、"如何使用"、"有什么功能"
-- "查找资料"、"搜索文档"、"查询知识库"
-- "介绍" + 产品/网站/系统名称
+【关键区分】
+- Report：用户想"分析/查看/查询"某个具体视频的数据或信息（有明确视频ID或想查某个视频）
+- VideoRecommend：用户想"推荐/找"视频（没有具体视频ID，想要推荐列表）
+- VideoSummary：用户想"总结/概括"视频内容（视频讲了什么）
 
-第二优先级 - VideoSummary（视频内容总结）：
-- "视频总结"、"视频内容"、"这个视频讲什么"、"总结一下视频" → VideoSummary
+【Few-shot示例】
+Q: "这个网站干啥的"
+A: RAG
 
-第三优先级 - CommentAnalysis（评论分析）：
-- "评论"、"弹幕"、"观众反馈"、"评论分析"、"弹幕分析" → CommentAnalysis
+Q: "VisionWorld是什么"
+A: RAG
 
-第四优先级 - VideoRecommend（视频推荐）：
-- "推荐"、"推荐视频"、"有什么好看的"、"感兴趣的视频"、"给我推荐点视频" → VideoRecommend
+Q: "系统怎么用"
+A: RAG
 
-第五优先级 - UserLikedVideos（点赞查询）：
-- "我点赞过"、"我赞过的"、"我收藏的视频"、"点赞记录"、"我喜欢的视频" → UserLikedVideos
+Q: "介绍一下产品功能"
+A: RAG
 
-第六优先级 - HotVideo（最火视频）：
-- "最火视频"、"最热门视频"、"爆款视频"、"热搜视频"、"大家都在看什么" → HotVideo
+Q: "分析一下视频123的数据"
+A: Report
 
-第七优先级 - HotLive（最火直播）：
-- "最火直播"、"热门直播"、"正在直播"、"直播推荐"、"有什么好看的直播" → HotLive
+Q: "分析下视频1766329556"
+A: Report
 
-第八优先级 - Report（视频数据分析）：
-- "视频数据"、"视频统计"、"视频报表"、"生成报告"、"分析视频" → Report
+Q: "查看视频123的信息"
+A: Report
 
-第九优先级 - Creative（创作分析）：
-- "选题"、"热门"、"趋势"、"创作方向"、"竞品分析"、"什么选题最火" → Creative
+Q: "查询视频数据"
+A: Report
 
-最低优先级 - Chat（闲聊）：
-- 问候语、日常对话、不涉及上述任何功能的问题 → Chat
+Q: "总结一下视频内容"
+A: VideoSummary
 
-【重要示例】
-- "visionWorld网站干啥的" → RAG（包含"网站"+"干啥"）
-- "这个系统怎么用" → RAG（包含"系统"+"怎么用"）
-- "介绍一下产品功能" → RAG（包含"介绍"+"功能"）
-- "帮我分析视频123的评论" → CommentAnalysis
-- "给我推荐一些好看的视频" → VideoRecommend
-- "最近什么视频最火" → HotVideo
-- "帮我总结一下视频456的内容" → VideoSummary
+Q: "这个视频讲了什么"
+A: VideoSummary
 
-【输出格式】
-只输出一个单词：Report / Creative / RAG / Chat / CommentAnalysis / VideoRecommend / UserLikedVideos / HotVideo / HotLive / VideoSummary
+Q: "推荐一些好看的视频"
+A: VideoRecommend
+
+Q: "有什么好看的视频"
+A: VideoRecommend
+
+Q: "最近什么视频最火"
+A: HotVideo
+
+Q: "帮我分析评论"
+A: CommentAnalysis
+
+Q: "你好"
+A: Chat
+
+【任务】
+分析以下查询，只输出意图类型（RAG/Report/VideoSummary/CommentAnalysis/VideoRecommend/UserLikedVideos/HotVideo/HotLive/Creative/Chat）：
 
 用户查询：{query}`),
 			schema.UserMessage("{query}"),
