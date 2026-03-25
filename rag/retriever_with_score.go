@@ -74,6 +74,14 @@ func l2DocumentConverter(ctx context.Context, result client.SearchResult) ([]*sc
 			}
 		}
 
+		// 计算 L2 相似度分数 (距离越小越相似)
+		// 使用公式: similarity = 1 / (1 + distance)
+		var similarity float64
+		if i < len(result.Scores) {
+			l2Distance := float64(result.Scores[i])
+			similarity = 1.0 / (1.0 + l2Distance)
+		}
+
 		// 获取元数据
 		if metadataCol != nil && i < metadataCol.Len() {
 			metadataBytes, err := metadataCol.Get(i)
@@ -85,12 +93,10 @@ func l2DocumentConverter(ctx context.Context, result client.SearchResult) ([]*sc
 			}
 		}
 
-		// 计算 L2 相似度分数 (距离越小越相似)
-		// 使用公式: similarity = 1 / (1 + distance)
+		// 设置分数（确保不被 metadata 覆盖）
+		doc.MetaData["score"] = similarity
 		if i < len(result.Scores) {
-			l2Distance := result.Scores[i]
-			similarity := 1.0 / (1.0 + l2Distance)
-			doc.MetaData["score"] = similarity
+			doc.MetaData["l2_distance"] = float64(result.Scores[i])
 		}
 
 		documents = append(documents, doc)
