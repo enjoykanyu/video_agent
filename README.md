@@ -526,9 +526,6 @@ type Agent interface {
 
 ***
 
-<p align="center">
-  Made with ❤️ by 视频智能体团队
-</p>
 
 <p align="center">
   <b>Star ⭐ 这个项目如果它对你有帮助!</b>
